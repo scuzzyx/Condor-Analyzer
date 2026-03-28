@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 
 # --- CONFIG & THEME ---
 st.set_page_config(page_title="Money Machine Pro V3.2.1", layout="wide", initial_sidebar_state="expanded")
-st.title("⚙️ Money Machine Pro V3.2.1 (Full UI & Data Restore)")
+st.title("⚙️ Money Machine Pro V3.2.1")
 
 # --- HOW TO USE / DOCUMENTATION ---
 with st.expander("📖 How to Use This Engine & Risk Legend", expanded=False):
@@ -18,7 +18,7 @@ with st.expander("📖 How to Use This Engine & Risk Legend", expanded=False):
     3. **Review Setups:** Check risk grades, **IV**, and **Earnings Dates** before entry.
     
     ### 🚦 Risk Legend
-    * 🟢 **LOW RISK:** Holding above support and 20-day MA.
+    * 🟢 **LOW RISK:** Ideal neutral chop. Above support and 20-day MA.
     * 🟡 **MED RISK:** Stalling or struggling under MA.
     * 🟡 **TRENDING (ADX > 25):** Moving too fast for Iron Condors.
     * 🟠 **GAP RISK (> 1.5%):** Dangerous overnight jumps.
@@ -156,7 +156,6 @@ for sym in selected_tickers:
             if exp_str:
                 chain = t.option_chain(exp_str)
                 calls = chain.calls
-                # Pull IV from nearest strike to current price
                 iv_raw = calls.iloc[(calls['strike'] - curr).abs().argsort()[:1]]['impliedVolatility'].values[0]
                 iv_val = f"{iv_raw * 100:.1f}%"
         except: pass
@@ -164,7 +163,6 @@ for sym in selected_tickers:
         try:
             cal = t.calendar
             if cal is not None and not cal.empty:
-                # Support for different yfinance calendar formats
                 e_date = cal.iloc[0,0] if isinstance(cal, pd.DataFrame) else cal.get('Earnings Date', [None])[0]
                 if e_date:
                     earnings_date = e_date.strftime('%Y-%m-%d')
@@ -177,5 +175,3 @@ for sym in selected_tickers:
         elif adx > 25: r, c = f"🟡 TRENDING (ADX {adx:.1f} - Use Directional Spreads)", "orange"
         elif curr > sup and curr > ma20: r, c = "🟢 LOW RISK (Neutral Chop)", "green"
         else: r, c = "🟡 MED RISK (Stalling)", "orange"
-
-        with st.expander(f"{sym} | Price:
