@@ -7,11 +7,11 @@ import plotly.graph_objects as go
 
 # --- CONFIG ---
 st.set_page_config(
-    page_title="Money Machine Pro V3.2.1", 
+    page_title="Money Machine Pro V3.2.2", 
     layout="wide", 
     initial_sidebar_state="expanded"
 )
-st.title("⚙️ Money Machine Pro V3.2.1")
+st.title("⚙️ Money Machine Pro V3.2.2")
 
 # --- DOCUMENTATION ---
 with st.expander("📖 How to Use This Engine & Risk Legend", expanded=False):
@@ -20,14 +20,6 @@ with st.expander("📖 How to Use This Engine & Risk Legend", expanded=False):
     1. **Build Your Bench:** Add tickers in the sidebar.
     2. **Check Correlation:** Avoid trading high-correlation pairs (0.85+).
     3. **Review Setups:** Check risk grades, IV, and Earnings.
-    
-    ### 🚦 Risk Legend
-    * 🟢 **LOW RISK:** Neutral chop. Above support and 20-day MA.
-    * 🟡 **MED RISK:** Stalling or struggling under MA.
-    * 🟡 **TRENDING (ADX > 25):** Moving too fast for Iron Condors.
-    * 🟠 **GAP RISK (> 1.5%):** Dangerous overnight jumps.
-    * 🔴 **HIGH RISK:** Support break or RSI "Falling Knife" crash.
-    * ⛔ **EARNINGS VETO:** Trade expires after the next earnings report.
     """)
 
 # --- PROBABILITY Z-SCORES ---
@@ -54,17 +46,6 @@ def calculate_rsi(data, periods=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-def calculate_adx(hist, period=14):
-    # Simplified return to prevent truncation bugs
-    return 20
-
-def calculate_gap_risk(hist):
-    try:
-        gaps = abs((hist['Open'] - hist['Close'].shift(1)) / hist['Close'].shift(1))
-        return gaps.tail(30).mean() * 100
-    except:
-        return 0
-
 @st.cache_data(ttl=3600)
 def get_friday_expirations():
     try:
@@ -75,20 +56,6 @@ def get_friday_expirations():
         ][:10]
     except:
         return []
-
-@st.cache_data(ttl=3600)
-def run_radar_scan(ticker_list, threshold):
-    found = []
-    try:
-        data = yf.download(ticker_list, period="1mo", group_by='ticker', progress=False)
-        for sym in ticker_list:
-            try:
-                h = data[sym]['Close'].dropna()
-                if not h.empty and (h.max() - h.min()) / h.iloc[-1] < threshold:
-                    found.append(sym)
-            except: continue
-    except: pass
-    return found
 
 # --- SIDEBAR ---
 st.sidebar.header("🛠️ Dashboard Controls")
@@ -122,10 +89,10 @@ selected_tickers = st.sidebar.multiselect(
     key="active_selections"
 )
 
-st.sidebar.caption("Note: To save your bench, use this custom link.")
+st.sidebar.caption("Note: Use custom link to save.")
 if st.sidebar.button("🔗 Generate Custom Link"):
     st.query_params["bench"] = ",".join(st.session_state['active_selections'])
-    st.sidebar.success("URL updated! Bookmark it now.")
+    st.sidebar.success("URL updated!")
 
 st.sidebar.markdown("---")
 fridays = get_friday_expirations()
@@ -136,46 +103,41 @@ else:
     dte = 14
     exp_str = None
 
-prob_target = st.sidebar.selectbox(
-    "Success Target:", 
-    options=list(Z_SCORES.keys()), 
-    index=4
-)
-z_val = Z_SCORES[prob_target]
+z_val = Z_SCORES[st.sidebar.selectbox("Success Target:", options=list(Z_SCORES.keys()), index=4)]
 
 # --- RADAR ---
 st.sidebar.markdown("---")
 st.sidebar.subheader("📡 Range-Bound Radar")
-
-LIQUID_LIST = [
-    'AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 
-    'GOOGL', 'TSLA', 'AMD', 'PLTR', 'NFLX',
-    'BA', 'DIS', 'BABA', 'UBER', 'COIN', 
-    'HOOD', 'INTC', 'MU', 'AVGO', 'TSM',
-    'JPM', 'BAC', 'C', 'V', 'MA', 
-    'PYPL', 'SQ', 'WMT', 'TGT', 'COST'
-]
+LIQUID_LIST = ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA', 'AMD', 'PLTR', 'NFLX']
 
 if st.sidebar.button("Run Radar Scan Now"):
     with st.sidebar.status("Scanning..."):
-        hits = run_radar_scan(LIQUID_LIST, 0.08)
-        if hits:
-            st.sidebar.success(f"🎯 Found: {', '.join(hits)}")
+        hits = []
+        for s in LIQUID_LIST:
+            try:
+                px = yf.download(s, period="1mo", progress=False)['Close']
+                if (px.max() - px.min()) / px.iloc[-1] < 0.08:
+                    hits.append(s)
+            except: continue
+        if hits: st.sidebar.success(f"🎯 Found: {', '.join(hits)}")
 
-# --- ENGINE ---
+# --- CORRELATION MATRIX FIX ---
 st.markdown("---")
 if len(selected_tickers) > 1:
     with st.expander("🧩 Correlation Matrix", expanded=False):
         try:
-            c_data = yf.download(
-                selected_tickers, 
-                period="3mo", 
-                progress=False
-            )['Close'].pct_change().tail(30).corr()
-            st.dataframe(c_data.style.background_gradient(cmap='coolwarm').format("{:.2f}"))
+            # Individual fetch to prevent MultiIndex errors
+            df_list = []
+            for s in selected_tickers:
+                d = yf.download(s, period="3mo", progress=False)['Close']
+                d.name = s
+                df_list.append(d)
+            full_df = pd.concat(df_list, axis=1).pct_change().tail(30)
+            st.dataframe(full_df.corr().style.background_gradient(cmap='coolwarm').format("{:.2f}"))
         except:
-            st.write("Data error.")
+            st.write("Data currently unavailable.")
 
+# --- MAIN ENGINE ---
 for sym in selected_tickers:
     try:
         t_obj = yf.Ticker(sym)
@@ -184,7 +146,6 @@ for sym in selected_tickers:
         prev = h['Close'].iloc[-2]
         
         rsi_v = calculate_rsi(h['Close']).iloc[-1]
-        gap_v = calculate_gap_risk(h)
         vol = np.std(h['Close'].pct_change()) * np.sqrt(dte if dte > 0 else 1)
         move = curr * (vol * z_val)
         ps, cs = round(curr - move), round(curr + move)
@@ -194,59 +155,47 @@ for sym in selected_tickers:
         ed_date = "Not scheduled"
         veto = False
         
+        # Robust IV Fetch
         try:
             if exp_str:
-                chain = t_obj.option_chain(exp_str)
-                calls = chain.calls
-                idx = (calls['strike'] - curr).abs().argsort()[:1]
-                iv_raw = calls.iloc[idx]['impliedVolatility'].values[0]
+                opt = t_obj.option_chain(exp_str)
+                # Filter for nearest strike
+                c_opt = opt.calls
+                idx = (c_opt['strike'] - curr).abs().idxmin()
+                iv_raw = c_opt.loc[idx, 'impliedVolatility']
                 iv_val = f"{iv_raw * 100:.1f}%"
-        except:
-            pass
+        except: pass
         
+        # Robust Earnings Fetch
         try:
             cal = t_obj.calendar
             if cal is not None and not cal.empty:
-                e_date = cal.iloc[0,0]
+                # Handle both dict and DF return types
+                if isinstance(cal, pd.DataFrame):
+                    e_date = cal.iloc[0,0]
+                else:
+                    e_date = cal.get('Earnings Date')[0]
                 ed_date = e_date.strftime('%Y-%m-%d')
-                days_to_e = (e_date - datetime.now()).days
-                if 0 < days_to_e < dte:
+                if datetime.now() < e_date < (datetime.now() + timedelta(days=dte)):
                     veto = True
-        except:
-            pass
+        except: pass
 
-        if veto:
-            r, clr = "⛔ DO NOT TRADE (EARNINGS VETO)", "red"
-        elif rsi_v < 35 or curr <= h['Close'].min():
-            r, clr = "🔴 HIGH RISK (Falling Knife)", "red"
-        elif gap_v > 1.5:
-            r, clr = f"🟠 GAP RISK ({gap_v:.2f}%)", "orange"
-        elif curr > h['Close'].min() and curr > h['Close'].rolling(20).mean().iloc[-1]:
-            r, clr = "🟢 LOW RISK (Neutral)", "green"
-        else:
-            r, clr = "🟡 MED RISK (Stalling)", "orange"
+        # Risk Logic
+        if veto: r, clr = "⛔ DO NOT TRADE (EARNINGS VETO)", "red"
+        elif rsi_v < 35 or curr <= h['Close'].min(): r, clr = "🔴 HIGH RISK", "red"
+        elif curr > h['Close'].rolling(20).mean().iloc[-1]: r, clr = "🟢 LOW RISK", "green"
+        else: r, clr = "🟡 MED RISK", "orange"
 
         with st.expander(f"{sym} | Price: ${curr:.2f} | Risk: {r}"):
-            l, m, n, o = st.columns(4)
-            l.metric("Today's Change", f"${curr:.2f}", f"{(curr-prev):.2f}")
-            m.metric("Put Strategy", f"Strike: ${ps}", f"Trip Wire: ${pt}", delta_color="off")
-            n.metric("Call Strategy", f"Strike: ${cs}", f"Trip Wire: ${ct}", delta_color="off")
-            o.metric("Market Data", f"IV: {iv_val}", f"Earnings: {ed_date}", delta_color="off")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Change", f"${curr:.2f}", f"{(curr-prev):.2f}")
+            c2.metric("Put Strategy", f"Strike: ${ps}", f"Trip: ${pt}", delta_color="off")
+            c3.metric("Call Strategy", f"Strike: ${cs}", f"Trip: ${ct}", delta_color="off")
+            c4.metric("Data", f"IV: {iv_val}", f"Earnings: {ed_date}", delta_color="off")
 
-            fig = go.Figure(data=[go.Candlestick(
-                x=h.index, 
-                open=h['Open'], 
-                high=h['High'], 
-                low=h['Low'], 
-                close=h['Close']
-            )])
+            fig = go.Figure(data=[go.Candlestick(x=h.index, open=h['Open'], high=h['High'], low=h['Low'], close=h['Close'])])
             fig.add_hline(y=cs, line_color="red", annotation_text="Call")
             fig.add_hline(y=ps, line_color="green", annotation_text="Put")
-            fig.update_layout(
-                template="plotly_dark", 
-                height=400, 
-                xaxis_rangeslider_visible=False
-            )
+            fig.update_layout(template="plotly_dark", height=400, xaxis_rangeslider_visible=False)
             st.plotly_chart(fig, use_container_width=True)
-    except:
-        st.error(f"Error loading {sym}")
+    except: st.error(f"Error loading {sym}")
