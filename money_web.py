@@ -249,13 +249,22 @@ for symbol in selected_tickers:
         except:
             pass
 
-        # Earnings Check
+       # Earnings Check
         earnings_date = "Not yet scheduled"
         earnings_veto = False
         try:
             cal = t.calendar
-            if not cal.empty and 'Earnings Date' in cal.index:
-                e_date = cal.loc['Earnings Date'][0].to_pydatetime()
+            e_date = None
+            
+            # Handles both the new Dictionary format and the old DataFrame format
+            if isinstance(cal, dict) and 'Earnings Date' in cal and cal['Earnings Date']:
+                e_date = cal['Earnings Date'][0]
+            elif isinstance(cal, pd.DataFrame) and not cal.empty and 'Earnings Date' in cal.index:
+                e_date = cal.loc['Earnings Date'][0]
+                
+            if e_date:
+                # Normalizes whatever date format YF hands back into a standard timestamp
+                e_date = pd.to_datetime(e_date) 
                 earnings_date = e_date.strftime('%Y-%m-%d')
                 if datetime.now() < e_date < selected_date:
                     earnings_veto = True
