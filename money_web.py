@@ -80,9 +80,9 @@ def calculate_volume_nodes(hist, current_price, bins=30):
         lower = sorted([p for p in peaks if p < current_price])
         
         r1 = f"${upper[0]:.2f}" if len(upper) > 0 else "Sky (None)"
-        r2 = f"${upper[1]:.2f}" if len(upper) > 1 else "N/A"
+        r2 = f"${upper[1]:.2f}" if len(upper) > 1 else "⚠️ No 90d Wall"
         s1 = f"${lower[-1]:.2f}" if len(lower) > 0 else "Freefall (None)"
-        s2 = f"${lower[-2]:.2f}" if len(lower) > 1 else "N/A"
+        s2 = f"${lower[-2]:.2f}" if len(lower) > 1 else "⚠️ No 90d Wall"
         
         return f"${poc:.2f}", s1, s2, r1, r2
     except:
