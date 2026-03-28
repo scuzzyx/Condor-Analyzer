@@ -9,21 +9,21 @@ import plotly.graph_objects as go
 st.set_page_config(page_title="Money Machine Pro V3.2.1", layout="wide", initial_sidebar_state="expanded")
 st.title("⚙️ Money Machine Pro V3.2.1")
 
-# --- DETAILED INSTRUCTIONS ---
+# --- HOW TO USE / DOCUMENTATION ---
 with st.expander("📖 How to Use This Engine & Risk Legend", expanded=False):
     st.markdown("""
-    ### 🧠 The Strategic Workflow
-    1. **Build Your Bench:** Add tickers manually in the sidebar or use the **Range-Bound Radar** to find stocks currently consolidating (chopping sideways).
-    2. **Check Correlation:** Look at the **30-Day Matrix**. If two stocks are highly correlated (0.85+), they move together. Trading Iron Condors on both simultaneously effectively doubles your risk on a single move.
-    3. **Review Risk Grades:** Expand a ticker to see the automated grade. 
+    ### 🧠 The Workflow
+    1. **Build Your Bench:** Add tickers in the sidebar or use the **Radar** to find sideways movers.
+    2. **Check Correlation:** Avoid trading high-correlation pairs (0.85+) simultaneously.
+    3. **Review Setups:** Check risk grades, **IV**, and **Earnings Dates** before entry.
     
-    ### 🚦 Risk Legend & Veto System
-    * 🟢 **LOW RISK (Neutral Chop):** Stock is holding above 3-month support and its 20-day Moving Average. High probability for Iron Condors.
-    * 🟡 **MED RISK (Stalling):** Stock is above support but struggling to stay above its 20-day MA. Proceed with caution.
-    * 🟡 **TRENDING (ADX > 25):** The stock has strong momentum. Iron Condors are risky here; consider directional credit spreads instead.
-    * 🟠 **GAP RISK (> 1.5%):** The stock historically "gaps" (jumps) significantly overnight. This can bypass your stop-losses.
-    * 🔴 **HIGH RISK (Falling Knife):** RSI is oversold or the stock broke a major support floor. Do not attempt to catch it.
-    * ⛔ **EARNINGS VETO:** An earnings report occurs before your expiration. The engine suggests skipping to avoid the volatility spike.
+    ### 🚦 Risk Legend
+    * 🟢 **LOW RISK:** Ideal neutral chop. Above support and 20-day MA.
+    * 🟡 **MED RISK:** Stalling or struggling under MA.
+    * 🟡 **TRENDING (ADX > 25):** Moving too fast for Iron Condors.
+    * 🟠 **GAP RISK (> 1.5%):** Dangerous overnight jumps.
+    * 🔴 **HIGH RISK:** Support break or RSI "Falling Knife" crash.
+    * ⛔ **EARNINGS VETO:** Trade expires after the next earnings report.
     """)
 
 # --- PROBABILITY Z-SCORES ---
@@ -118,5 +118,27 @@ z_val = Z_SCORES[prob_target]
 # --- RADAR ---
 st.sidebar.markdown("---")
 st.sidebar.subheader("📡 Range-Bound Radar")
-LIQUID_50 = ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA', 'AMD', 'PLTR', 'NFLX', 'BA', 'DIS', 'BABA', 'UBER', 'COIN', 'HOOD', 'INTC', 'MU', 'AVGO', 'TSM', 'JPM', 'BAC', 'C', 'V', 'MA', 'PYPL', 'SQ', 'WMT', 'TGT', 'COST', 'HD', 'SBUX', 'NKE', 'MCD', 'XOM', 'CVX', 'CAT', 'GE', 'JNJ', 'PFE', 'UNH', 'LLY', 'CMCSA', 'VZ', 'T', 'QCOM', 'CRM', 'SNOW', 'SHOP', 'SPOT']
-SP_100 = ['AAPL', 'ABBV', 'ABT', 'ACN', 'ADBE', 'AIG', 'AMD', 'AMGN', 'AMT', 'AMZN', 'AXP', 'BA', 'BAC', 'BK', 'BKNG', 'BLK', 'BMY', 'C', 'CAT', 'CHTR', 'CL', 'CMCSA', 'COF', 'COP', 'COST', 'CRM', 'CSCO', 'CVS
+
+# Broken into multiple lines to avoid GitHub truncation bugs
+LIQUID_50 = [
+    'AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA', 'AMD', 'PLTR', 'NFLX',
+    'BA', 'DIS', 'BABA', 'UBER', 'COIN', 'HOOD', 'INTC', 'MU', 'AVGO', 'TSM',
+    'JPM', 'BAC', 'C', 'V', 'MA', 'PYPL', 'SQ', 'WMT', 'TGT', 'COST',
+    'HD', 'SBUX', 'NKE', 'MCD', 'XOM', 'CVX', 'CAT', 'GE', 'JNJ', 'PFE',
+    'UNH', 'LLY', 'CMCSA', 'VZ', 'T', 'QCOM', 'CRM', 'SNOW', 'SHOP', 'SPOT'
+]
+
+SP_100 = [
+    'AAPL', 'ABBV', 'ABT', 'ACN', 'ADBE', 'AIG', 'AMD', 'AMGN', 'AMT', 'AMZN',
+    'AXP', 'BA', 'BAC', 'BK', 'BKNG', 'BLK', 'BMY', 'C', 'CAT', 'CHTR',
+    'CL', 'CMCSA', 'COF', 'COP', 'COST', 'CRM', 'CSCO', 'CVS', 'CVX', 'DHR',
+    'DIS', 'DOW', 'DUK', 'EMR', 'EXC', 'F', 'FDX', 'GD', 'GE', 'GILD',
+    'GM', 'GOOG', 'GOOGL', 'GS', 'HD', 'HON', 'IBM', 'INTC', 'JNJ', 'JPM',
+    'KHC', 'KO', 'LIN', 'LLY', 'LMT', 'LOW', 'MA', 'MCD', 'MDLZ', 'MDT',
+    'MET', 'META', 'MMM', 'MO', 'MRK', 'MS', 'MSFT', 'NEE', 'NFLX', 'NKE',
+    'NVDA', 'ORCL', 'OXY', 'PEP', 'PFE', 'PG', 'PM', 'PYPL', 'QCOM', 'RTX',
+    'SBUX', 'SCHW', 'SO', 'SPG', 'T', 'TGT', 'TMO', 'TSLA', 'TXN', 'UNH',
+    'UNP', 'UPS', 'USB', 'V', 'VZ', 'WBA', 'WFC', 'WMT', 'XOM'
+]
+
+scan_choice = st.sidebar.radio("Select Scan Universe:", ["Top 50 Liquid", "S&
