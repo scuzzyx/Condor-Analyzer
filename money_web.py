@@ -65,4 +65,4 @@ def calculate_gap_risk(hist):
 def get_friday_expirations():
     try:
         dates = yf.Ticker("SPY").options
-        return [d for d in dates if datetime.strptime
+        return [d for d in dates if datetime.strptime]
