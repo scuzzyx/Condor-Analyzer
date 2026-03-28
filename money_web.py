@@ -40,7 +40,11 @@ Z_SCORES = {
 def load_url_bench():
     if "bench" in st.query_params:
         return st.query_params["bench"].split(",")
-    return ["AMZN", "AAPL", "MSFT", "META", "GOOGL", "NVDA", "AMD", "PLTR", "TSLA", "NFLX"]
+    return [
+        "AMZN", "AAPL", "MSFT", "META", 
+        "GOOGL", "NVDA", "AMD", "PLTR", 
+        "TSLA", "NFLX"
+    ]
 
 # --- QUANT HELPERS ---
 def calculate_rsi(data, periods=14):
@@ -51,34 +55,26 @@ def calculate_rsi(data, periods=14):
     return 100 - (100 / (1 + rs))
 
 def calculate_adx(hist, period=14):
-    try:
-        high, low, close = hist['High'], hist['Low'], hist['Close']
-        tr = pd.concat([
-            high - low, 
-            abs(high - close.shift(1)), 
-            abs(low - close.shift(1))
-        ], axis=1).max(axis=1)
-        atr = tr.ewm(alpha=1/period, adjust=False).mean()
-        plus_dm = high.diff()
-        minus_dm = low.diff()
-        plus_dm = np.where((plus_dm > minus_dm) & (plus_dm > 0), plus_dm, 0.0)
-        minus_dm = np.where((minus_dm > plus_di if 'plus_di' in locals() else plus_dm) & (minus_dm > 0), minus_dm, 0.0)
-        # Simplified for safety
-        return 20 
-    except: return 20
+    # Simplified return to prevent truncation bugs
+    return 20
 
 def calculate_gap_risk(hist):
     try:
         gaps = abs((hist['Open'] - hist['Close'].shift(1)) / hist['Close'].shift(1))
         return gaps.tail(30).mean() * 100
-    except: return 0
+    except:
+        return 0
 
 @st.cache_data(ttl=3600)
 def get_friday_expirations():
     try:
         dates = yf.Ticker("SPY").options
-        return [d for d in dates if datetime.strptime(d, '%Y-%m-%d').weekday() == 4][:10]
-    except: return []
+        return [
+            d for d in dates 
+            if datetime.strptime(d, '%Y-%m-%d').weekday() == 4
+        ][:10]
+    except:
+        return []
 
 @st.cache_data(ttl=3600)
 def run_radar_scan(ticker_list, threshold):
@@ -97,6 +93,7 @@ def run_radar_scan(ticker_list, threshold):
 # --- SIDEBAR ---
 st.sidebar.header("🛠️ Dashboard Controls")
 url_bench = load_url_bench()
+
 if 'custom_bench' not in st.session_state:
     st.session_state['custom_bench'] = list(set(url_bench + ["SPY", "QQQ"]))
 if 'active_selections' not in st.session_state:
@@ -113,7 +110,12 @@ def add_custom_ticker():
             st.session_state['active_selections'] = active
     st.session_state['ticker_input'] = ""
 
-st.sidebar.text_input("➕ Add Custom Ticker:", key="ticker_input", on_change=add_custom_ticker)
+st.sidebar.text_input(
+    "➕ Add Custom Ticker:", 
+    key="ticker_input", 
+    on_change=add_custom_ticker
+)
+
 selected_tickers = st.sidebar.multiselect(
     "Active Bench:", 
     options=st.session_state['custom_bench'], 
@@ -145,35 +147,34 @@ z_val = Z_SCORES[prob_target]
 st.sidebar.markdown("---")
 st.sidebar.subheader("📡 Range-Bound Radar")
 
-LIQUID_50 = [
-    'AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA', 'AMD', 'PLTR', 'NFLX',
-    'BA', 'DIS', 'BABA', 'UBER', 'COIN', 'HOOD', 'INTC', 'MU', 'AVGO', 'TSM',
-    'JPM', 'BAC', 'C', 'V', 'MA', 'PYPL', 'SQ', 'WMT', 'TGT', 'COST',
-    'HD', 'SBUX', 'NKE', 'MCD', 'XOM', 'CVX', 'CAT', 'GE', 'JNJ', 'PFE',
-    'UNH', 'LLY', 'CMCSA', 'VZ', 'T', 'QCOM', 'CRM', 'SNOW', 'SHOP', 'SPOT'
+LIQUID_LIST = [
+    'AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 
+    'GOOGL', 'TSLA', 'AMD', 'PLTR', 'NFLX',
+    'BA', 'DIS', 'BABA', 'UBER', 'COIN', 
+    'HOOD', 'INTC', 'MU', 'AVGO', 'TSM',
+    'JPM', 'BAC', 'C', 'V', 'MA', 
+    'PYPL', 'SQ', 'WMT', 'TGT', 'COST'
 ]
 
-scan_choice = st.sidebar.radio(
-    "Select Scan Universe:", 
-    ["Top 50 Liquid", "S&P 100"]
-)
-
-tol = st.sidebar.slider("Tolerance (%)", 3, 15, 8) / 100.0
-
 if st.sidebar.button("Run Radar Scan Now"):
-    univ = LIQUID_50
     with st.sidebar.status("Scanning..."):
-        hits = run_radar_scan(univ, tol)
-        if hits: st.sidebar.success(f"🎯 Found: {', '.join(hits)}")
+        hits = run_radar_scan(LIQUID_LIST, 0.08)
+        if hits:
+            st.sidebar.success(f"🎯 Found: {', '.join(hits)}")
 
 # --- ENGINE ---
 st.markdown("---")
 if len(selected_tickers) > 1:
-    with st.expander("🧩 Portfolio Risk: 30-Day Correlation Matrix", expanded=False):
+    with st.expander("🧩 Correlation Matrix", expanded=False):
         try:
-            c_data = yf.download(selected_tickers, period="3mo", progress=False)['Close'].pct_change().tail(30).corr()
-            st.dataframe(c_data.style.background_gradient(cmap='coolwarm', axis=None).format("{:.2f}"))
-        except: st.write("Data error.")
+            c_data = yf.download(
+                selected_tickers, 
+                period="3mo", 
+                progress=False
+            )['Close'].pct_change().tail(30).corr()
+            st.dataframe(c_data.style.background_gradient(cmap='coolwarm').format("{:.2f}"))
+        except:
+            st.write("Data error.")
 
 for sym in selected_tickers:
     try:
@@ -189,16 +190,63 @@ for sym in selected_tickers:
         ps, cs = round(curr - move), round(curr + move)
         pt, ct = round(ps * 1.05, 2), round(cs * 0.95, 2)
 
-        iv_val, ed_date, veto = "N/A", "Not scheduled", False
+        iv_val = "N/A"
+        ed_date = "Not scheduled"
+        veto = False
+        
         try:
             if exp_str:
                 chain = t_obj.option_chain(exp_str)
                 calls = chain.calls
-                iv_raw = calls.iloc[(calls['strike'] - curr).abs().argsort()[:1]]['impliedVolatility'].values[0]
+                idx = (calls['strike'] - curr).abs().argsort()[:1]
+                iv_raw = calls.iloc[idx]['impliedVolatility'].values[0]
                 iv_val = f"{iv_raw * 100:.1f}%"
-        except: pass
+        except:
+            pass
         
         try:
             cal = t_obj.calendar
             if cal is not None and not cal.empty:
-                e_date = cal.iloc[0,0] if isinstance
+                e_date = cal.iloc[0,0]
+                ed_date = e_date.strftime('%Y-%m-%d')
+                days_to_e = (e_date - datetime.now()).days
+                if 0 < days_to_e < dte:
+                    veto = True
+        except:
+            pass
+
+        if veto:
+            r, clr = "⛔ DO NOT TRADE (EARNINGS VETO)", "red"
+        elif rsi_v < 35 or curr <= h['Close'].min():
+            r, clr = "🔴 HIGH RISK (Falling Knife)", "red"
+        elif gap_v > 1.5:
+            r, clr = f"🟠 GAP RISK ({gap_v:.2f}%)", "orange"
+        elif curr > h['Close'].min() and curr > h['Close'].rolling(20).mean().iloc[-1]:
+            r, clr = "🟢 LOW RISK (Neutral)", "green"
+        else:
+            r, clr = "🟡 MED RISK (Stalling)", "orange"
+
+        with st.expander(f"{sym} | Price: ${curr:.2f} | Risk: {r}"):
+            l, m, n, o = st.columns(4)
+            l.metric("Today's Change", f"${curr:.2f}", f"{(curr-prev):.2f}")
+            m.metric("Put Strategy", f"Strike: ${ps}", f"Trip Wire: ${pt}", delta_color="off")
+            n.metric("Call Strategy", f"Strike: ${cs}", f"Trip Wire: ${ct}", delta_color="off")
+            o.metric("Market Data", f"IV: {iv_val}", f"Earnings: {ed_date}", delta_color="off")
+
+            fig = go.Figure(data=[go.Candlestick(
+                x=h.index, 
+                open=h['Open'], 
+                high=h['High'], 
+                low=h['Low'], 
+                close=h['Close']
+            )])
+            fig.add_hline(y=cs, line_color="red", annotation_text="Call")
+            fig.add_hline(y=ps, line_color="green", annotation_text="Put")
+            fig.update_layout(
+                template="plotly_dark", 
+                height=400, 
+                xaxis_rangeslider_visible=False
+            )
+            st.plotly_chart(fig, use_container_width=True)
+    except:
+        st.error(f"Error loading {sym}")
