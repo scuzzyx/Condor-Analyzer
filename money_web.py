@@ -9,15 +9,27 @@ import plotly.graph_objects as go
 st.set_page_config(page_title="Condor-Tool", layout="wide", initial_sidebar_state="expanded")
 st.title("📊 Condor-Tool | Volatility & Probability Screener")
 
-# --- HIDE STREAMLIT BRANDING & GITHUB BUTTONS ---
-hide_header_style = """
+# --- HIDE STREAMLIT BRANDING, GITHUB BUTTONS, AND PROFILE BADGES ---
+hide_streamlit_style = """
     <style>
+    /* Hide the top header and GitHub/Fork buttons */
     header {visibility: hidden !important;}
+    
+    /* Hide the hamburger menu */
     #MainMenu {visibility: hidden !important;}
+    
+    /* Hide the standard Streamlit footer */
     footer {visibility: hidden !important;}
+    
+    /* Hide the floating 'Created by' profile badge and 'Hosted with Streamlit' */
+    .viewerBadge_container {display: none !important;}
+    .viewerBadge_link_text {display: none !important;}
+    
+    /* Remove the extra blank space left at the top after hiding the header */
+    .block-container {padding-top: 2rem !important;}
     </style>
 """
-st.markdown(hide_header_style, unsafe_allow_html=True)
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
 # --- PROBABILITY Z-SCORES ---
 Z_SCORES = {
