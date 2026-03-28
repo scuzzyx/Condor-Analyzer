@@ -116,7 +116,7 @@ if 'custom_bench' not in st.session_state:
 if 'active_selections' not in st.session_state:
     st.session_state['active_selections'] = url_bench
 
-# --- THE ONE CHANGE: INSTANT AUTO-ADD CALLBACK ---
+# --- INSTANT AUTO-ADD CALLBACK ---
 def add_custom_ticker():
     ticker = st.session_state['ticker_input'].upper().strip()
     if ticker:
@@ -159,18 +159,21 @@ z_score = Z_SCORES[prob_target]
 # --- RANGE-BOUND RADAR (MANUAL SCAN) ---
 st.sidebar.markdown("---")
 st.sidebar.subheader("📡 Range-Bound Radar")
+st.sidebar.caption("Scan restricted to the Top 50 highest options liquidity stocks.")
 
-UNIVERSES = {
-    "Nasdaq Proxy (Fast)": ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'TSLA', 'NVDA', 'AVGO', 'PEP', 'COST', 'CSCO', 'TMUS', 'ADBE', 'TXN', 'NFLX', 'QCOM', 'AMD', 'INTC', 'AMAT', 'ISRG'],
-    "S&P 500 (Deep Scan)": get_sp500_tickers() 
-}
+LIQUID_50 = [
+    'AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA', 'AMD', 'PLTR', 'NFLX',
+    'BA', 'DIS', 'BABA', 'UBER', 'COIN', 'HOOD', 'INTC', 'MU', 'AVGO', 'TSM',
+    'JPM', 'BAC', 'C', 'V', 'MA', 'PYPL', 'SQ', 'WMT', 'TGT', 'COST',
+    'HD', 'SBUX', 'NKE', 'MCD', 'XOM', 'CVX', 'CAT', 'GE', 'JNJ', 'PFE',
+    'UNH', 'LLY', 'CMCSA', 'VZ', 'T', 'QCOM', 'CRM', 'SNOW', 'SHOP', 'SPOT'
+]
 
-scan_choice = st.sidebar.radio("Select Scan Universe:", list(UNIVERSES.keys()))
 scan_tolerance = st.sidebar.slider("Consolidation Tolerance (%)", min_value=3, max_value=15, value=8) / 100.0
 
 if st.sidebar.button("Run Radar Scan Now"):
-    with st.sidebar.status(f"Scanning {scan_choice} at {int(scan_tolerance*100)}% tolerance..."):
-        targets = run_radar_scan(UNIVERSES[scan_choice], scan_tolerance)
+    with st.sidebar.status(f"Scanning Top 50 Liquid at {int(scan_tolerance*100)}% tolerance..."):
+        targets = run_radar_scan(LIQUID_50, scan_tolerance)
         if targets:
             st.sidebar.success(f"🎯 Targets Found: {', '.join(targets)}")
         else:
