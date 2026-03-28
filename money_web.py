@@ -6,8 +6,29 @@ from datetime import datetime, timedelta
 import plotly.graph_objects as go
 
 # --- CONFIG & THEME ---
-st.set_page_config(page_title="Money Machine Pro V3.1", layout="wide", initial_sidebar_state="expanded")
-st.title("⚙️ Money Machine Pro V3.1 (Liquidity Engine Active)")
+st.set_page_config(page_title="Money Machine Pro V3.2", layout="wide", initial_sidebar_state="expanded")
+st.title("⚙️ Money Machine Pro V3.2 (Liquidity Engine Active)")
+
+# --- HOW TO USE / DOCUMENTATION ---
+with st.expander("📖 How to Use This Engine & Risk Legend", expanded=False):
+    st.markdown("""
+    ### 🧠 The Workflow
+    1. **Build Your Bench:** Add tickers in the sidebar. Use the **Range-Bound Radar** to scan the market for stocks trading sideways.
+    2. **Check Correlation:** Look at the Matrix below. If you see high correlation (e.g., AAPL & MSFT at 0.85+), *do not* trade neutral strategies on both at the same time. You are doubling your risk.
+    3. **Review Setups:** Expand each ticker to see its mathematically calculated strikes, trip wires, and risk grade.
+    
+    ### 🚦 Risk Legend (The Veto System)
+    The engine analyzes price action, momentum, and volatility to grade the safety of an Iron Condor:
+    * 🟢 **LOW RISK (Neutral Chop):** The stock is holding above support and its 20-day moving average. Ideal setup for Iron Condors.
+    * 🟡 **MED RISK (Stalling):** The stock is above support but struggling under its moving average. Acceptable, but keep a tight leash.
+    * 🟡 **TRENDING (ADX > 25):** The stock is actively moving up or down too fast. *Avoid Iron Condors.* Use directional Credit Spreads instead.
+    * 🟠 **GAP RISK (> 1.5%):** The stock frequently jumps wildly overnight while the market is closed. Stop losses won't save you here. Avoid.
+    * 🔴 **HIGH RISK (Falling Knife):** RSI is completely oversold or the stock just broke a 3-month support floor. Do not step in front of it.
+    * ⛔ **EARNINGS VETO:** The company reports earnings before your expiration date. Automatic disqualification.
+    
+    ### 💾 Saving Your Loadout
+    Once your active bench is set up perfectly, click **🔗 Generate Custom Link** in the sidebar and bookmark the URL it creates.
+    """)
 
 # --- PROBABILITY Z-SCORES ---
 Z_SCORES = {
@@ -110,8 +131,12 @@ def add_custom_ticker():
     if ticker:
         if ticker not in st.session_state['custom_bench']:
             st.session_state['custom_bench'].append(ticker)
-        if ticker not in st.session_state['active_selections']:
-            st.session_state['active_selections'].append(ticker)
+        
+        current_active = st.session_state['active_selections'].copy()
+        if ticker not in current_active:
+            current_active.append(ticker)
+            st.session_state['active_selections'] = current_active
+            
     st.session_state['ticker_input'] = ""
 
 st.sidebar.text_input("➕ Add Custom Ticker (e.g. CAVA):", key="ticker_input", on_change=add_custom_ticker)
@@ -122,10 +147,11 @@ selected_tickers = st.sidebar.multiselect(
     key="active_selections"
 )
 
+st.sidebar.caption("Note: To save your bench loadout, use this custom link.")
 if st.sidebar.button("🔗 Generate Custom Link"):
     bench_string = ",".join(st.session_state['active_selections'])
     st.query_params["bench"] = bench_string
-    st.sidebar.success("URL updated! Bookmark this page to save your bench.")
+    st.sidebar.success("URL updated! Bookmark the page URL now.")
 
 st.sidebar.markdown("---")
 
@@ -147,136 +173,4 @@ st.sidebar.subheader("📡 Range-Bound Radar")
 
 LIQUID_50 = [
     'AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA', 'AMD', 'PLTR', 'NFLX',
-    'BA', 'DIS', 'BABA', 'UBER', 'COIN', 'HOOD', 'INTC', 'MU', 'AVGO', 'TSM',
-    'JPM', 'BAC', 'C', 'V', 'MA', 'PYPL', 'SQ', 'WMT', 'TGT', 'COST',
-    'HD', 'SBUX', 'NKE', 'MCD', 'XOM', 'CVX', 'CAT', 'GE', 'JNJ', 'PFE',
-    'UNH', 'LLY', 'CMCSA', 'VZ', 'T', 'QCOM', 'CRM', 'SNOW', 'SHOP', 'SPOT'
-]
-
-SP_100 = ['AAPL', 'ABBV', 'ABT', 'ACN', 'ADBE', 'AIG', 'AMD', 'AMGN', 'AMT', 'AMZN', 'AXP', 'BA', 'BAC', 'BK', 'BKNG', 'BLK', 'BMY', 'C', 'CAT', 'CHTR', 'CL', 'CMCSA', 'COF', 'COP', 'COST', 'CRM', 'CSCO', 'CVS', 'CVX', 'DHR', 'DIS', 'DOW', 'DUK', 'EMR', 'EXC', 'F', 'FDX', 'GD', 'GE', 'GILD', 'GM', 'GOOG', 'GOOGL', 'GS', 'HD', 'HON', 'IBM', 'INTC', 'JNJ', 'JPM', 'KHC', 'KO', 'LIN', 'LLY', 'LMT', 'LOW', 'MA', 'MCD', 'MDLZ', 'MDT', 'MET', 'META', 'MMM', 'MO', 'MRK', 'MS', 'MSFT', 'NEE', 'NFLX', 'NKE', 'NVDA', 'ORCL', 'OXY', 'PEP', 'PFE', 'PG', 'PM', 'PYPL', 'QCOM', 'RTX', 'SBUX', 'SCHW', 'SO', 'SPG', 'T', 'TGT', 'TMO', 'TSLA', 'TXN', 'UNH', 'UNP', 'UPS', 'USB', 'V', 'VZ', 'WBA', 'WFC', 'WMT', 'XOM']
-
-UNIVERSES = {
-    "Top 50 Liquid Options (Fast & Safe)": LIQUID_50,
-    "S&P 100 (Broader Scan)": SP_100
-}
-
-scan_choice = st.sidebar.radio("Select Scan Universe:", list(UNIVERSES.keys()))
-scan_tolerance = st.sidebar.slider("Consolidation Tolerance (%)", min_value=3, max_value=15, value=8) / 100.0
-
-if st.sidebar.button("Run Radar Scan Now"):
-    with st.sidebar.status(f"Scanning {scan_choice} at {int(scan_tolerance*100)}% tolerance..."):
-        targets = run_radar_scan(UNIVERSES[scan_choice], scan_tolerance)
-        if targets:
-            st.sidebar.success(f"🎯 Targets Found: {', '.join(targets)}")
-        else:
-            st.sidebar.warning("No setups found. Try increasing the Tolerance (%) slider.")
-
-# --- PORTFOLIO CORRELATION ENGINE ---
-st.markdown("---")
-if len(selected_tickers) > 1:
-    with st.expander("🧩 Portfolio Risk: 30-Day Correlation Matrix", expanded=False):
-        try:
-            bench_data = yf.download(selected_tickers, period="3mo", progress=False)['Close']
-            returns = bench_data.pct_change().tail(30)
-            corr_matrix = returns.corr()
-            
-            high_corr_pairs = []
-            for i in range(len(corr_matrix.columns)):
-                for j in range(i+1, len(corr_matrix.columns)):
-                    if corr_matrix.iloc[i, j] > 0.8:
-                        high_corr_pairs.append(f"{corr_matrix.columns[i]} & {corr_matrix.columns[j]} ({corr_matrix.iloc[i, j]:.2f})")
-                        
-            if high_corr_pairs:
-                st.warning(f"⚠️ HIGH CONCENTRATION RISK: {', '.join(high_corr_pairs)}. Avoid deploying capital on both simultaneously.")
-            else:
-                st.success("🟢 No severe correlations found in active bench. Good diversification.")
-                
-            st.dataframe(corr_matrix.style.background_gradient(cmap='coolwarm', axis=None).format("{:.2f}"))
-        except Exception as e:
-            st.write("Not enough data to calculate correlation matrix.")
-st.markdown("---")
-
-# --- MAIN ENGINE ---
-for symbol in selected_tickers:
-    try:
-        t = yf.Ticker(symbol)
-        hist = t.history(period="3mo")
-        
-        if len(hist) < 20:
-            st.warning(f"Not enough data for {symbol}")
-            continue
-            
-        current_price = hist['Close'].iloc[-1]
-        prev_close = hist['Close'].iloc[-2]
-        change_dlr = current_price - prev_close
-        change_pct = (change_dlr / prev_close) * 100
-        
-        ma_20 = hist['Close'].rolling(window=20).mean().iloc[-1]
-        support_3mo = hist['Close'].min()
-        rsi_14 = calculate_rsi(hist['Close']).iloc[-1]
-        adx_14 = calculate_adx(hist)
-        gap_risk = calculate_gap_risk(hist)
-        
-        daily_returns = hist['Close'].pct_change().dropna()
-        volatility_dte = np.std(daily_returns) * np.sqrt(dte if dte > 0 else 1)
-        expected_move = current_price * (volatility_dte * z_score)
-        
-        put_strike = round(current_price - expected_move)
-        call_strike = round(current_price + expected_move)
-        
-        put_trip = round(put_strike * 1.05, 2)
-        call_trip = round(call_strike * 0.95, 2)
-        
-        atm_iv = "N/A"
-        try:
-            chain = t.option_chain(selected_date_str)
-            calls = chain.calls
-            atm_call = calls.iloc[(calls['strike'] - current_price).abs().argsort()[:1]]
-            atm_iv = f"{atm_call['impliedVolatility'].values[0] * 100:.1f}%"
-        except:
-            pass
-
-        earnings_date = "Not yet scheduled"
-        earnings_veto = False
-        try:
-            cal = t.calendar
-            if not cal.empty and 'Earnings Date' in cal.index:
-                e_date = cal.loc['Earnings Date'][0].to_pydatetime()
-                earnings_date = e_date.strftime('%Y-%m-%d')
-                if datetime.now() < e_date < selected_date:
-                    earnings_veto = True
-        except:
-            pass
-            
-        if earnings_veto:
-            risk, color = "⛔ DO NOT TRADE (EARNINGS VETO)", "red"
-        elif rsi_14 < 35 or current_price <= support_3mo:
-            risk, color = "🔴 HIGH RISK (Structural Break / Falling Knife)", "red"
-        elif gap_risk > 1.5:
-            risk, color = f"🟠 GAP RISK (Avg Overnight Gap: {gap_risk:.2f}%)", "orange"
-        elif adx_14 > 25:
-            risk, color = f"🟡 TRENDING (ADX {adx_14:.1f} - Use Directional Spreads)", "orange"
-        elif current_price > support_3mo and current_price > ma_20:
-            risk, color = "🟢 LOW RISK (Neutral Chop)", "green"
-        else:
-            risk, color = "🟡 MED RISK (Stalling)", "orange"
-
-        with st.expander(f"{symbol}  |  Price: ${current_price:.2f}  |  Risk: {risk}", expanded=False):
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Today's Change", f"${current_price:.2f}", f"{change_dlr:.2f} ({change_pct:.2f}%)")
-            col2.metric("Put Strategy", f"Strike: ${put_strike}", f"Trip Wire: ${put_trip}", delta_color="off")
-            col3.metric("Call Strategy", f"Strike: ${call_strike}", f"Trip Wire: ${call_trip}", delta_color="off")
-            col4.metric("Market Data", f"IV: {atm_iv}", f"Earnings: {earnings_date}", delta_color="off")
-
-            fig = go.Figure(data=[go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'], name="Price")])
-            
-            fig.add_hline(y=call_strike, line_width=2, line_color="red", annotation_text="Call Strike")
-            fig.add_hline(y=put_strike, line_width=2, line_color="green", annotation_text="Put Strike")
-            fig.add_hline(y=call_trip, line_width=1, line_dash="dash", line_color="yellow", annotation_text="Call Alert")
-            fig.add_hline(y=put_trip, line_width=1, line_dash="dash", line_color="yellow", annotation_text="Put Alert")
-            
-            fig.update_layout(template="plotly_dark", height=400, margin=dict(l=0, r=0, t=30, b=0), xaxis_rangeslider_visible=False)
-            st.plotly_chart(fig, use_container_width=True)
-
-    except Exception as e:
-        st.error(f"Error loading {symbol}. It may be missing options data.")
+    'BA', 'DIS', 'BABA', 'UBER', 'COIN', 'HOOD', 'INTC', 'MU',
