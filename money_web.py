@@ -185,4 +185,4 @@ for sym in selected_tickers:
 
             fig = go.Figure(data=[go.Candlestick(x=h.index, open=h['Open'], high=h['High'], low=h['Low'], close=h['Close'], name="Price")])
             fig.add_hline(y=cs, line_color="red", annotation_text="Call Strike")
-            fig.add_hline(y=ps, line
+            fig.add_hline(y=ps, line)
