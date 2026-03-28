@@ -175,3 +175,14 @@ for sym in selected_tickers:
         elif adx > 25: r, c = f"🟡 TRENDING (ADX {adx:.1f} - Use Directional Spreads)", "orange"
         elif curr > sup and curr > ma20: r, c = "🟢 LOW RISK (Neutral Chop)", "green"
         else: r, c = "🟡 MED RISK (Stalling)", "orange"
+
+        with st.expander(f"{sym} | Price: ${curr:.2f} | Risk: {r}"):
+            l, m, n, o = st.columns(4)
+            l.metric("Today's Change", f"${curr:.2f}", f"{(curr-prev):.2f} ({( (curr-prev)/prev * 100):.2f}%)")
+            m.metric("Put Strategy", f"Strike: ${ps}", f"Trip Wire: ${pt}", delta_color="off")
+            n.metric("Call Strategy", f"Strike: ${cs}", f"Trip Wire: ${ct}", delta_color="off")
+            o.metric("Market Data", f"IV: {iv_val}", f"Earnings: {earnings_date}", delta_color="off")
+
+            fig = go.Figure(data=[go.Candlestick(x=h.index, open=h['Open'], high=h['High'], low=h['Low'], close=h['Close'], name="Price")])
+            fig.add_hline(y=cs, line_color="red", annotation_text="Call Strike")
+            fig.add_hline(y=ps, line
