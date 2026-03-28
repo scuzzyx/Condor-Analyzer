@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 
 # --- CONFIG & THEME ---
 st.set_page_config(page_title="Money Machine Pro V3", layout="wide", initial_sidebar_state="expanded")
-st.title("⚙️ Money Machine Pro V3 (Risk Engine Active)")
+st.title("📊 Condor-Tool | Volatility & Probability Screener")
 
 # --- PROBABILITY Z-SCORES ---
 Z_SCORES = {
