@@ -12,21 +12,20 @@ st.title("📊 Condor-Tool | Volatility & Probability Screener")
 # --- HIDE STREAMLIT BRANDING, GITHUB BUTTONS, AND PROFILE BADGES ---
 hide_streamlit_style = """
     <style>
-    /* Hide the top header and GitHub/Fork buttons */
-    header {visibility: hidden !important;}
+    /* HIDE TOP HEADER & GITHUB/FORK BUTTONS */
+    [data-testid="stHeader"] {display: none !important;}
+    [data-testid="stToolbar"] {display: none !important;}
     
-    /* Hide the hamburger menu */
-    #MainMenu {visibility: hidden !important;}
+    /* HIDE THE STANDARD STREAMLIT FOOTER */
+    footer {display: none !important;}
     
-    /* Hide the standard Streamlit footer */
-    footer {visibility: hidden !important;}
+    /* HIDE THE "HOSTED WITH STREAMLIT" PROFILE BADGE (WILDCARD HUNT) */
+    div[class^="viewerBadge"] {display: none !important;}
+    div[class*="viewerBadge"] {display: none !important;}
+    a[href*="streamlit.io/cloud"] {display: none !important;}
     
-    /* Hide the floating 'Created by' profile badge and 'Hosted with Streamlit' */
-    .viewerBadge_container {display: none !important;}
-    .viewerBadge_link_text {display: none !important;}
-    
-    /* Remove the extra blank space left at the top after hiding the header */
-    .block-container {padding-top: 2rem !important;}
+    /* PULL THE DASHBOARD UP TO REMOVE THE BLANK GAP */
+    .block-container {padding-top: 1rem !important;}
     </style>
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
