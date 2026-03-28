@@ -46,4 +46,4 @@ def calculate_adx(hist, period=14):
         plus_di = 100 * (pd.Series(plus_dm, index=high.index).ewm(alpha=1/period, adjust=False).mean() / atr)
         minus_di = 100 * (pd.Series(minus_dm, index=high.index).ewm(alpha=1/period, adjust=False).mean() / atr)
         
-        dx = (abs(plus_di - minus_di) / abs(plus_di + minus_
+        dx = (abs(plus_di - minus_di) / abs(plus_di + minus_di)) * 100
