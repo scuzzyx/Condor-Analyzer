@@ -260,10 +260,14 @@ for symbol in selected_tickers:
         
         # Quantitative Indicators
         ma_20 = hist['Close'].rolling(window=20).mean().iloc[-1]
+        ema_8 = hist['Close'].ewm(span=8, adjust=False).mean().iloc[-1]
         support_3mo = hist['Close'].min()
         
         # --- MULTI-TIMEFRAME RSI MATH ---
-        rsi_5 = calculate_rsi(hist['Close'], periods=5).iloc[-1]
+        rsi_series_5 = calculate_rsi(hist['Close'], periods=5)
+        rsi_5 = rsi_series_5.iloc[-1]
+        rsi_5_prev = rsi_series_5.iloc[-2] # Used to detect the "hook"
+        
         rsi_9 = calculate_rsi(hist['Close'], periods=9).iloc[-1]
         rsi_14 = calculate_rsi(hist['Close'], periods=14).iloc[-1]
         
@@ -314,19 +318,21 @@ for symbol in selected_tickers:
         except:
             pass
             
-        # TIER 1 RISK OVERRIDES
+        # --- THE NEW BINARY EXHAUSTION / RISK SYSTEM ---
         if earnings_veto:
-            risk, color = "⛔ DO NOT TRADE (EARNINGS VETO)", "red"
-        elif rsi_14 < 35 or current_price <= support_3mo:
-            risk, color = "🔴 HIGH RISK (Structural Break / Falling Knife)", "red"
+            risk = "⛔ VETO: Earnings Before Expiration"
+        elif current_price < ema_8 and rsi_14 < 45:
+            risk = "🔴 FALLING KNIFE: Price below 8-EMA (Wait for reclaim)"
+        elif current_price > ema_8 and rsi_5 > rsi_5_prev and rsi_14 < 50:
+            risk = "🟢 FLOOR CONFIRMED: 8-EMA Reclaimed & Sellers Exhausted"
         elif gap_risk > 1.5:
-            risk, color = f"🟠 GAP RISK (Avg Overnight Gap: {gap_risk:.2f}%)", "orange"
+            risk = f"🟠 GAP RISK: High Overnight Volatility ({gap_risk:.2f}%)"
         elif adx_14 > 25:
-            risk, color = f"🟡 TRENDING (ADX {adx_14:.1f} - Use Directional Spreads)", "orange"
-        elif current_price > support_3mo and current_price > ma_20:
-            risk, color = "🟢 LOW RISK (Neutral Chop)", "green"
+            risk = f"🟡 TRENDING: ADX {adx_14:.1f} (Avoid Iron Condors)"
+        elif current_price > ma_20:
+            risk = "🟢 NEUTRAL CHOP: Favorable for Premium Selling"
         else:
-            risk, color = "🟡 MED RISK (Stalling)", "orange"
+            risk = "🟡 MED RISK: Price Action Stalling"
 
         # --- UI DISPLAY ---
         with st.expander(f"{symbol}  |  Price: ${current_price:.2f}  |  Risk: {risk}", expanded=False):
@@ -338,7 +344,6 @@ for symbol in selected_tickers:
             
             st.markdown("---")
             
-            # --- THE NEW 4-COLUMN ROW (NATIVE STREAMLIT) ---
             def get_rsi_state(val):
                 if pd.isna(val): return "⚪"
                 elif val >= 70: return "🔥"
@@ -348,7 +353,6 @@ for symbol in selected_tickers:
             v1, v2, v3, v4 = st.columns(4)
             v1.metric("🧲 Point of Control (POC)", poc, "Highest Vol Magnet", delta_color="off")
             
-            # 100% Native text stacking. No HTML. No CSS.
             with v2:
                 st.caption("📈 RSI Momentum Stack")
                 st.write(f"**5-Day:** {rsi_5:.1f} {get_rsi_state(rsi_5)}")
@@ -359,6 +363,10 @@ for symbol in selected_tickers:
             v4.metric("🔴 Call Defense (Ceilings)", f"Wall 1: {res1}", f"Wall 2: {res2}", delta_color="off")
 
             fig = go.Figure(data=[go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'], name="Price")])
+            
+            # --- ADDING THE NEW 8-EMA LINE TO THE CHART ---
+            ema_8_series = hist['Close'].ewm(span=8, adjust=False).mean()
+            fig.add_trace(go.Scatter(x=hist.index, y=ema_8_series, line=dict(color='#ff9900', width=1.5, dash='dot'), name="8-Day EMA (Trend)"))
             
             fig.add_hline(y=call_strike, line_width=2, line_color="red", annotation_text="Call Strike")
             fig.add_hline(y=put_strike, line_width=2, line_color="green", annotation_text="Put Strike")
