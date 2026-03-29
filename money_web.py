@@ -9,24 +9,6 @@ import plotly.graph_objects as go
 st.set_page_config(page_title="Condor-Tool", layout="wide", initial_sidebar_state="expanded")
 st.title("📊 Condor-Tool | Volatility & Probability Screener")
 
-# --- CUSTOM CSS FOR YELLOW TRIP WIRES (THE FIX) ---
-# We inject a CSS rule that hides the standard arrow for all metric deltas
-# and forces the font color to yellow, overriding standard logic.
-yellow_metric_css = """
-<style>
-/* targets the trip wire line specifically */
-[data-testid="stMetricDelta"] {
-    color: #ff9900 !important;
-    background-color: transparent !important;
-}
-/* hides the arrow icons for both put and call strategies */
-[data-testid="stMetricDelta"] > div {
-    display: none !important;
-}
-</style>
-"""
-st.markdown(yellow_metric_css, unsafe_allow_html=True)
-
 # --- HIDE STREAMLIT BRANDING ---
 hide_streamlit_style = """
     <style>
@@ -275,23 +257,31 @@ for symbol in selected_tickers:
 
         with st.expander(f"{symbol} | Price: ${current_price:.2f} | Risk: {risk}", expanded=False):
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Change", f"${current_price:.2f}", f"{change_pct:.2f}%")
             
-            # --- THE FIX ---
-            # We set standard delta color logic to "off" to make the text appear gray.
-            # BUT, the CSS rule in Part 1 targets this element ([data-testid="stMetricDelta"]),
-            # forces the color to yellow, and hides the standard arrow.
-            c2.metric("Put Strategy", f"${put_strike}", f"Trip: ${put_trip}", delta_color="off")
-            c3.metric("Call Strategy", f"${call_strike}", f"Trip: ${call_trip}", delta_color="off")
+            # Column 1: Price Change
+            c1.metric("Today's Change", f"${current_price:.2f}", f"{change_pct:.2f}%")
             
-            with c4:
-                st.markdown(f"""
-                <div style="line-height: 1.4;">
-                    <span style="font-size: 0.8rem; color: #a6a6a6;">Market Data</span><br>
-                    <span style="font-size: 1.8rem; font-weight: bold;">{atm_iv} IV</span><br>
-                    <span style="font-size: 0.9rem; color: #a6a6a6;">Earnings: {earnings_date}</span>
+            # Helper function for neutral gray text blocks
+            def neutral_box(label, value, sub_value):
+                return f"""
+                <div style="line-height: 1.4; margin-bottom: 10px;">
+                    <span style="font-size: 0.8rem; color: #a6a6a6;">{label}</span><br>
+                    <span style="font-size: 1.8rem; font-weight: bold;">{value}</span><br>
+                    <span style="font-size: 0.9rem; color: #a6a6a6;">{sub_value}</span>
                 </div>
-                """, unsafe_allow_html=True)
+                """
+
+            # Column 2: Put Strategy (HTML for neutral styling)
+            with c2:
+                st.markdown(neutral_box("Put Strategy", f"${put_strike}", f"Trip Wire: ${put_trip}"), unsafe_allow_html=True)
+                
+            # Column 3: Call Strategy (HTML for neutral styling)
+            with c3:
+                st.markdown(neutral_box("Call Strategy", f"${call_strike}", f"Trip Wire: ${call_trip}"), unsafe_allow_html=True)
+            
+            # Column 4: Market Data (HTML for neutral styling)
+            with c4:
+                st.markdown(neutral_box("Market Data", f"{atm_iv} IV", f"Earnings: {earnings_date}"), unsafe_allow_html=True)
             
             st.markdown("---")
             v1, v2, v3, v4 = st.columns(4)
