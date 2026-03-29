@@ -3,13 +3,16 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-import plotly.graph_objects as go
+from scipy.signal import find_peaks
 
-# --- CONFIG & THEME ---
-st.set_page_config(page_title="Condor-Tool", layout="wide", initial_sidebar_state="expanded")
-st.title("📊 Condor-Tool | Volatility & Probability Screener")
+# --- 1. PAGE CONFIGURATION ---
+st.set_page_config(
+    page_title="Condor-Tool Terminal", 
+    layout="wide", 
+    initial_sidebar_state="expanded"
+)
 
-# --- HIDE STREAMLIT BRANDING, GITHUB BUTTONS, AND PROFILE BADGES ---
+# --- 2. HIDE STREAMLIT BRANDING & GITHUB BUTTONS ---
 hide_streamlit_style = """
     <style>
     /* HIDE TOP HEADER & GITHUB/FORK BUTTONS */
@@ -30,324 +33,126 @@ hide_streamlit_style = """
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
-# --- PROBABILITY Z-SCORES ---
-Z_SCORES = {
-    "70%": 1.04, "75%": 1.15, "80%": 1.28, 
-    "85%": 1.44, "90%": 1.645, "95%": 1.96
-}
+# --- 3. MATH & INDICATOR FUNCTIONS ---
+def calculate_rsi(df, periods=14):
+    """Calculates the Relative Strength Index (RSI)."""
+    close_delta = df['Close'].diff()
+    up = close_delta.clip(lower=0)
+    down = -1 * close_delta.clip(upper=0)
+    
+    # Calculate the exponential moving averages
+    ma_up = up.ewm(com=periods - 1, adjust=True, min_periods=periods).mean()
+    ma_down = down.ewm(com=periods - 1, adjust=True, min_periods=periods).mean()
+    
+    rsi = ma_up / ma_down
+    rsi = 100 - (100 / (1 + rsi))
+    return rsi
 
-def load_url_bench():
-    if "bench" in st.query_params:
-        return st.query_params["bench"].split(",")
-    return ["AMZN", "AAPL", "MSFT", "META", "GOOGL", "NVDA", "AMD", "PLTR", "TSLA", "NFLX"]
+def get_volume_profile(df, bins=50):
+    """Calculates Volume Profile, Point of Control (POC), and Volume Walls."""
+    hist, bin_edges = np.histogram(df['Close'], bins=bins, weights=df['Volume'])
+    prices = (bin_edges[:-1] + bin_edges[1:]) / 2
+    profile = pd.DataFrame({'Price': prices, 'Volume': hist})
+    
+    # Find POC (Price with highest volume)
+    poc_idx = profile['Volume'].idxmax()
+    poc_price = profile.loc[poc_idx, 'Price']
+    
+    # Find Walls (Significant peaks in volume distribution)
+    peaks, _ = find_peaks(profile['Volume'], distance=3, prominence=profile['Volume'].max()*0.1)
+    wall_prices = profile.loc[peaks, 'Price'].values
+    
+    return profile, poc_price, wall_prices
 
-def calculate_rsi(data, periods=14):
-    delta = data.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=periods).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=periods).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
+# --- 4. MAIN APP UI & SIDEBAR ---
+st.title("🦅 Condor-Tool Terminal V3")
 
-def calculate_adx(hist, period=14):
-    try:
-        high, low, close = hist['High'], hist['Low'], hist['Close']
-        plus_dm = high.diff()
-        minus_dm = low.diff()
-        plus_dm = np.where((plus_dm > minus_dm) & (plus_dm > 0), plus_dm, 0.0)
-        minus_dm = np.where((minus_dm > plus_dm) & (minus_dm > 0), minus_dm, 0.0)
+with st.sidebar:
+    st.header("Terminal Parameters")
+    ticker_symbol = st.text_input("Ticker Symbol", value="META").upper()
+    days_to_exp = st.number_input("Days to Expiration", min_value=1, value=20)
+    z_score = st.slider("Z-Score Defense Level", min_value=1.0, max_value=3.0, value=1.5, step=0.1)
+
+# --- 5. DATA FETCHING & LOGIC PIPELINE ---
+if ticker_symbol:
+    ticker = yf.Ticker(ticker_symbol)
+    df = ticker.history(period="3mo") # 90-day lookback for structure
+    
+    if not df.empty:
+        current_price = df['Close'].iloc[-1]
         
-        tr1 = high - low
-        tr2 = abs(high - close.shift(1))
-        tr3 = abs(low - close.shift(1))
-        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        # --- INDICATOR MATH ---
+        df['RSI'] = calculate_rsi(df)
+        current_rsi = df['RSI'].iloc[-1]
         
-        atr = tr.ewm(alpha=1/period, adjust=False).mean()
-        plus_di = 100 * (pd.Series(plus_dm, index=high.index).ewm(alpha=1/period, adjust=False).mean() / atr)
-        minus_di = 100 * (pd.Series(minus_dm, index=high.index).ewm(alpha=1/period, adjust=False).mean() / atr)
-        
-        dx = (abs(plus_di - minus_di) / abs(plus_di + minus_di)) * 100
-        adx = dx.ewm(alpha=1/period, adjust=False).mean()
-        return adx.iloc[-1]
-    except:
-        return 20 
-
-def calculate_gap_risk(hist):
-    try:
-        gaps = abs((hist['Open'] - hist['Close'].shift(1)) / hist['Close'].shift(1))
-        return gaps.tail(30).mean() * 100
-    except:
-        return 0
-
-def calculate_volume_nodes(hist, current_price, bins=30):
-    try:
-        min_p, max_p = hist['Low'].min(), hist['High'].max()
-        price_bins = np.linspace(min_p, max_p, bins)
-        inds = np.digitize(hist['Close'], price_bins)
-        
-        vol_profile = np.zeros(bins)
-        for i in range(len(hist)):
-            if 0 <= inds[i]-1 < bins:
-                vol_profile[inds[i]-1] += hist['Volume'].iloc[i]
-                
-        poc = price_bins[np.argmax(vol_profile)]
-        
-        peaks = []
-        mean_vol = np.mean(vol_profile)
-        for i in range(1, bins-1):
-            if vol_profile[i] > vol_profile[i-1] and vol_profile[i] > vol_profile[i+1] and vol_profile[i] > mean_vol * 0.5:
-                peaks.append(price_bins[i])
-                
-        upper = sorted([p for p in peaks if p > current_price])
-        lower = sorted([p for p in peaks if p < current_price])
-        
-        r1 = f"${upper[0]:.2f}" if len(upper) > 0 else "Sky (None)"
-        r2 = f"${upper[1]:.2f}" if len(upper) > 1 else "⚠️ No 90d Wall"
-        s1 = f"${lower[-1]:.2f}" if len(lower) > 0 else "Freefall (None)"
-        s2 = f"${lower[-2]:.2f}" if len(lower) > 1 else "⚠️ No 90d Wall"
-        
-        return f"${poc:.2f}", s1, s2, r1, r2
-    except:
-        return "N/A", "N/A", "N/A", "N/A", "N/A"
-
-@st.cache_data(ttl=3600)  
-def get_friday_expirations():
-    try:
-        spy = yf.Ticker("SPY")
-        dates = spy.options
-        fridays = [d for d in dates if datetime.strptime(d, '%Y-%m-%d').weekday() == 4]
-        return fridays[:10]
-    except:
-        return [(datetime.now() + timedelta(days=i)).strftime('%Y-%m-%d') for i in range(14, 60) if (datetime.now() + timedelta(days=i)).weekday() == 4]
-
-@st.cache_data(ttl=3600) 
-def run_radar_scan(ticker_list, threshold):
-    found_targets = []
-    try:
-        bulk_data = yf.download(ticker_list, period="1mo", group_by='ticker', progress=False)
-        for sym in ticker_list:
-            try:
-                if len(ticker_list) > 1:
-                    hist = bulk_data[sym]['Close'].dropna()
-                else:
-                    hist = bulk_data['Close'].dropna()
-                    
-                if len(hist) > 10:
-                    high_1m = hist.max().iloc[0] if isinstance(hist.max(), pd.Series) else hist.max()
-                    low_1m = hist.min().iloc[0] if isinstance(hist.min(), pd.Series) else hist.min()
-                    current = hist.iloc[-1].iloc[0] if isinstance(hist.iloc[-1], pd.Series) else hist.iloc[-1]
-                    
-                    if (high_1m - low_1m) / current < threshold:
-                        found_targets.append(sym)
-            except:
-                continue
-    except Exception as e:
-        pass
-    return found_targets
-
-# --- SIDEBAR CONTROLS ---
-st.sidebar.header("🛠️ Dashboard Controls")
-
-url_bench = load_url_bench()
-
-if 'custom_bench' not in st.session_state:
-    st.session_state['custom_bench'] = list(set(url_bench + ["SPY", "QQQ"]))
-
-if 'active_selections' not in st.session_state:
-    st.session_state['active_selections'] = url_bench
-
-def add_custom_ticker():
-    ticker = st.session_state['ticker_input'].upper().strip()
-    if ticker:
-        if ticker not in st.session_state['custom_bench']:
-            st.session_state['custom_bench'].append(ticker)
-        current_active = st.session_state['active_selections'].copy()
-        if ticker not in current_active:
-            current_active.append(ticker)
-            st.session_state['active_selections'] = current_active
-    st.session_state['ticker_input'] = ""
-
-st.sidebar.text_input("➕ Add Custom Ticker (e.g. CAVA):", key="ticker_input", on_change=add_custom_ticker)
-
-selected_tickers = st.sidebar.multiselect(
-    "Active Bench:", 
-    options=st.session_state['custom_bench'], 
-    key="active_selections"
-)
-
-if st.sidebar.button("🔗 Generate Custom Link"):
-    bench_string = ",".join(st.session_state['active_selections'])
-    st.query_params["bench"] = bench_string
-    st.sidebar.success("URL updated! Bookmark this page to save your bench.")
-
-st.sidebar.markdown("---")
-
-available_fridays = get_friday_expirations()
-if available_fridays:
-    selected_date_str = st.sidebar.selectbox("Expiration Date (Fridays Only):", options=available_fridays)
-    selected_date = datetime.strptime(selected_date_str, '%Y-%m-%d')
-    dte = (selected_date - datetime.now()).days
-else:
-    st.sidebar.error("Error loading dates.")
-    dte = 14
-    selected_date_str = None
-
-prob_target = st.sidebar.selectbox("Probability of Success Target:", options=list(Z_SCORES.keys()), index=4)
-z_score = Z_SCORES[prob_target]
-
-# --- RANGE-BOUND RADAR (MANUAL SCAN) ---
-st.sidebar.markdown("---")
-st.sidebar.subheader("📡 Range-Bound Radar")
-st.sidebar.caption("Scan restricted to the Top 50 highest options liquidity stocks.")
-
-LIQUID_50 = [
-    'AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA', 'AMD', 'PLTR', 'NFLX',
-    'BA', 'DIS', 'BABA', 'UBER', 'COIN', 'HOOD', 'INTC', 'MU', 'AVGO', 'TSM',
-    'JPM', 'BAC', 'C', 'V', 'MA', 'PYPL', 'SQ', 'WMT', 'TGT', 'COST',
-    'HD', 'SBUX', 'NKE', 'MCD', 'XOM', 'CVX', 'CAT', 'GE', 'JNJ', 'PFE',
-    'UNH', 'LLY', 'CMCSA', 'VZ', 'T', 'QCOM', 'CRM', 'SNOW', 'SHOP', 'SPOT'
-]
-
-scan_tolerance = st.sidebar.slider("Consolidation Tolerance (%)", min_value=3, max_value=15, value=8) / 100.0
-
-if st.sidebar.button("Run Radar Scan Now"):
-    with st.sidebar.status(f"Scanning Top 50 Liquid at {int(scan_tolerance*100)}% tolerance..."):
-        targets = run_radar_scan(LIQUID_50, scan_tolerance)
-        if targets:
-            st.sidebar.success(f"🎯 Targets Found: {', '.join(targets)}")
+        if current_rsi >= 70:
+            rsi_state = "🔥 Overbought"
+        elif current_rsi <= 30:
+            rsi_state = "🧊 Oversold"
         else:
-            st.sidebar.warning("No setups found. Try increasing the Tolerance (%) slider.")
+            rsi_state = "⚪ Neutral"
+            
+        profile, poc_price, walls = get_volume_profile(df)
+        
+        # Sort walls relative to current price to find floors and ceilings
+        put_walls = sorted([w for w in walls if w < current_price], reverse=True)
+        call_walls = sorted([w for w in walls if w > current_price])
+        
+        wall_1_put_text = f"${put_walls[0]:.2f}" if len(put_walls) > 0 else "Freefall (None)"
+        wall_2_put_text = f"${put_walls[1]:.2f}" if len(put_walls) > 1 else "⚠️ No 90d Wall"
+        
+        wall_1_call_text = f"${call_walls[0]:.2f}" if len(call_walls) > 0 else "Blue Sky (None)"
+        wall_2_call_text = f"${call_walls[1]:.2f}" if len(call_walls) > 1 else "⚠️ No 90d Wall"
 
-# --- PORTFOLIO CORRELATION ENGINE ---
-st.markdown("---")
-if len(selected_tickers) > 1:
-    with st.expander("🧩 Portfolio Risk: 30-Day Correlation Matrix", expanded=False):
-        try:
-            bench_data = yf.download(selected_tickers, period="3mo", progress=False)['Close']
-            returns = bench_data.pct_change().tail(30)
-            corr_matrix = returns.corr()
-            
-            high_corr_pairs = []
-            for i in range(len(corr_matrix.columns)):
-                for j in range(i+1, len(corr_matrix.columns)):
-                    if corr_matrix.iloc[i, j] > 0.8:
-                        high_corr_pairs.append(f"{corr_matrix.columns[i]} & {corr_matrix.columns[j]} ({corr_matrix.iloc[i, j]:.2f})")
-                        
-            if high_corr_pairs:
-                st.warning(f"⚠️ HIGH CONCENTRATION RISK: {', '.join(high_corr_pairs)}. Avoid deploying capital on both simultaneously.")
-            else:
-                st.success("🟢 No severe correlations found in active bench. Good diversification.")
-                
-            st.dataframe(corr_matrix.style.background_gradient(cmap='coolwarm', axis=None).format("{:.2f}"))
-        except Exception as e:
-            st.write("Not enough data to calculate correlation matrix.")
-st.markdown("---")
-
-# --- MAIN ENGINE ---
-for symbol in selected_tickers:
-    try:
-        t = yf.Ticker(symbol)
-        hist = t.history(period="3mo")
+        # --- EXPECTED MOVE & STRIKE MATH ---
+        # Calculating Historical Volatility to approximate Options Expected Move
+        daily_returns = df['Close'].pct_change().dropna()
+        hist_vol = daily_returns.std() * np.sqrt(252)
+        expected_move_pct = hist_vol * np.sqrt(days_to_exp / 365) * z_score
+        expected_move_dollar = current_price * expected_move_pct
         
-        if len(hist) < 20:
-            st.warning(f"Not enough data for {symbol}")
-            continue
-            
-        # Daily Performance
-        current_price = hist['Close'].iloc[-1]
-        prev_close = hist['Close'].iloc[-2]
-        change_dlr = current_price - prev_close
-        change_pct = (change_dlr / prev_close) * 100
+        put_strike_rec = current_price - expected_move_dollar
+        call_strike_rec = current_price + expected_move_dollar
         
-        # Quantitative Indicators
-        ma_20 = hist['Close'].rolling(window=20).mean().iloc[-1]
-        support_3mo = hist['Close'].min()
-        rsi_14 = calculate_rsi(hist['Close']).iloc[-1]
-        adx_14 = calculate_adx(hist)
-        gap_risk = calculate_gap_risk(hist)
-        poc, sup1, sup2, res1, res2 = calculate_volume_nodes(hist, current_price)
+        # --- RISK SYSTEM EVALUATION ---
+        sma_20 = df['Close'].rolling(window=20).mean().iloc[-1]
         
-        # Options Math
-        daily_returns = hist['Close'].pct_change().dropna()
-        volatility_dte = np.std(daily_returns) * np.sqrt(dte if dte > 0 else 1)
-        expected_move = current_price * (volatility_dte * z_score)
-        
-        put_strike = round(current_price - expected_move)
-        call_strike = round(current_price + expected_move)
-        
-        # 5% Trip Wires
-        put_trip = round(put_strike * 1.05, 2)
-        call_trip = round(call_strike * 0.95, 2)
-        
-        # Live IV
-        atm_iv = "N/A"
-        try:
-            if selected_date_str:
-                chain = t.option_chain(selected_date_str)
-                calls = chain.calls
-                atm_call = calls.iloc[(calls['strike'] - current_price).abs().argsort()[:1]]
-                atm_iv = f"{atm_call['impliedVolatility'].values[0] * 100:.1f}%"
-        except:
-            pass
-
-        # Earnings Check
-        earnings_date = "Not yet scheduled"
-        earnings_veto = False
-        try:
-            cal = t.calendar
-            e_date = None
-            
-            if isinstance(cal, dict) and 'Earnings Date' in cal and cal['Earnings Date']:
-                e_date = cal['Earnings Date'][0]
-            elif isinstance(cal, pd.DataFrame) and not cal.empty and 'Earnings Date' in cal.index:
-                e_date = cal.loc['Earnings Date'][0]
-                
-            if e_date:
-                e_date = pd.to_datetime(e_date) 
-                earnings_date = e_date.strftime('%Y-%m-%d')
-                if datetime.now() < e_date < selected_date:
-                    earnings_veto = True
-        except:
-            pass
-            
-        # TIER 1 RISK OVERRIDES
-        if earnings_veto:
-            risk, color = "⛔ DO NOT TRADE (EARNINGS VETO)", "red"
-        elif rsi_14 < 35 or current_price <= support_3mo:
-            risk, color = "🔴 HIGH RISK (Structural Break / Falling Knife)", "red"
-        elif gap_risk > 1.5:
-            risk, color = f"🟠 GAP RISK (Avg Overnight Gap: {gap_risk:.2f}%)", "orange"
-        elif adx_14 > 25:
-            risk, color = f"🟡 TRENDING (ADX {adx_14:.1f} - Use Directional Spreads)", "orange"
-        elif current_price > support_3mo and current_price > ma_20:
-            risk, color = "🟢 LOW RISK (Neutral Chop)", "green"
+        if current_price < sma_20 and len(put_walls) == 0:
+            risk_level = "🔴 HIGH RISK (Structural Break / Falling Knife)"
+        elif len(put_walls) == 0:
+            risk_level = "🔴 HIGH RISK (Air Pocket Below)"
+        elif len(put_walls) > 0 and put_strike_rec < put_walls[0]:
+            risk_level = "🟢 LOW RISK (Defensible Structure)"
         else:
-            risk, color = "🟡 MED RISK (Stalling)", "orange"
+            risk_level = "🟡 MODERATE RISK"
 
-        # --- UI DISPLAY ---
-        with st.expander(f"{symbol}  |  Price: ${current_price:.2f}  |  Risk: {risk}", expanded=False):
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Today's Change", f"${current_price:.2f}", f"{change_dlr:.2f} ({change_pct:.2f}%)")
-            col2.metric("Put Strategy", f"Strike: ${put_strike}", f"Trip Wire: ${put_trip}", delta_color="off")
-            col3.metric("Call Strategy", f"Strike: ${call_strike}", f"Trip Wire: ${call_trip}", delta_color="off")
-            col4.metric("Market Data", f"IV: {atm_iv}", f"Earnings: {earnings_date}", delta_color="off")
-            
-            st.markdown("---")
-            
-            v1, v2, v3 = st.columns(3)
-            v1.metric("🧲 Point of Control (POC)", poc, "Highest Vol Magnet", delta_color="off")
-            v2.metric("🟢 Put Defense (Floors)", f"Wall 1: {sup1}", f"Wall 2: {sup2}", delta_color="off")
-            v3.metric("🔴 Call Defense (Ceilings)", f"Wall 1: {res1}", f"Wall 2: {res2}", delta_color="off")
+        # --- 6. DASHBOARD DISPLAY ---
+        st.markdown("---")
+        col_a, col_b, col_c = st.columns(3)
+        col_a.metric("Current Price", f"${current_price:.2f}")
+        col_b.metric(f"Expected Move (+/- {z_score} Z)", f"${expected_move_dollar:.2f}")
+        col_c.metric("System Risk Level", risk_level)
+        
+        st.markdown("---")
+        
+        # --- STRUCTURAL ROW (4 COLUMNS) ---
+        col1, col2, col3, col4 = st.columns(4)
 
-            fig = go.Figure(data=[go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'], name="Price")])
-            
-            fig.add_hline(y=call_strike, line_width=2, line_color="red", annotation_text="Call Strike")
-            fig.add_hline(y=put_strike, line_width=2, line_color="green", annotation_text="Put Strike")
-            fig.add_hline(y=call_trip, line_width=1, line_dash="dash", line_color="yellow", annotation_text="Call Alert")
-            fig.add_hline(y=put_trip, line_width=1, line_dash="dash", line_color="yellow", annotation_text="Put Alert")
-            
-            fig.update_layout(template="plotly_dark", height=400, margin=dict(l=0, r=0, t=30, b=0), xaxis_rangeslider_visible=False)
-            st.plotly_chart(fig, use_container_width=True)
+        with col1:
+            st.metric(label="🧲 Point of Control (POC)", value=f"${poc_price:.2f}", delta="↑ Highest Vol Magnet", delta_color="off")
 
-    except Exception as e:
-        st.error(f"Error loading {symbol}. Options data may be missing.")
+        with col2:
+            st.metric(label="📈 14-Day RSI", value=f"{current_rsi:.1f}", delta=rsi_state, delta_color="off")
 
+        with col3:
+            st.metric(label="🟢 Put Defense (Floors)", value=f"Wall 1: {wall_1_put_text}", delta=f"↑ Wall 2: {wall_2_put_text}", delta_color="off")
+
+        with col4:
+            st.metric(label="🔴 Call Defense (Ceilings)", value=f"Wall 1: {wall_1_call_text}", delta=f"↑ Wall 2: {wall_2_call_text}", delta_color="off")
+            
+        st.markdown("---")
+        
+        # --- FINAL MATH OUTPUT ---
+        st.subheader("Engine Strike Recommendations")
+        st.write(f"**Safe Put Strike:** Below ${put_strike_rec:.2f}")
+        st.write(f"**Safe Call Strike:** Above ${call_strike_rec:.2f}")
