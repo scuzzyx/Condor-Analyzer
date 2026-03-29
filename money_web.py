@@ -17,6 +17,14 @@ hide_streamlit_style = """
     footer {display: none !important;}
     div[class^="viewerBadge"] {display: none !important;}
     .block-container {padding-top: 1rem !important;}
+    /* Targeted style to make all metric deltas yellow without arrows */
+    [data-testid="stMetricDelta"] {
+        color: #ff9900 !important;
+        background-color: transparent !important;
+    }
+    [data-testid="stMetricDelta"] > div {
+        display: none !important; /* Hides the arrow icons */
+    }
     </style>
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
@@ -258,9 +266,10 @@ for symbol in selected_tickers:
         with st.expander(f"{symbol} | Price: ${current_price:.2f} | Risk: {risk}", expanded=False):
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Change", f"${current_price:.2f}", f"{change_pct:.2f}%")
-            # Using delta_color="inverse" for Put Strategy (Red/Green swap)
-            c2.metric("Put Strategy", f"${put_strike}", f"Trip: ${put_trip}", delta_color="inverse")
-            c3.metric("Call Strategy", f"${call_strike}", f"Trip: ${call_trip}", delta_color="normal")
+            
+            # Simplified metric setup. CSS handles forcing delta to yellow and removing arrows.
+            c2.metric("Put Strategy", f"${put_strike}", f"Trip: ${put_trip}", delta_color="off")
+            c3.metric("Call Strategy", f"${call_strike}", f"Trip: ${call_trip}", delta_color="off")
             
             # Using st.markdown for the Market column to ensure neutral gray coloring
             with c4:
