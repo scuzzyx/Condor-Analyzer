@@ -156,6 +156,7 @@ z_score = Z_SCORES[prob_target]
 # --- RADAR SCANNER ---
 st.sidebar.markdown("---")
 st.sidebar.subheader("📡 Range-Bound Radar")
+st.sidebar.caption("Scan restricted to the Top 50 highest options liquidity stocks.")
 LIQUID_50 = ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA', 'AMD', 'PLTR', 'NFLX', 'BA', 'DIS', 'BABA', 'UBER', 'COIN', 'HOOD', 'INTC', 'MU', 'AVGO', 'TSM', 'JPM', 'BAC', 'C', 'V', 'MA', 'PYPL', 'SQ', 'WMT', 'TGT', 'COST', 'HD', 'SBUX', 'NKE', 'MCD', 'XOM', 'CVX', 'CAT', 'GE', 'JNJ', 'PFE', 'UNH', 'LLY', 'CMCSA', 'VZ', 'T', 'QCOM', 'CRM', 'SNOW', 'SHOP', 'SPOT']
 scan_tol = st.sidebar.slider("Tolerance (%)", 3, 15, 8) / 100.0
 if st.sidebar.button("Run Radar Scan Now"):
