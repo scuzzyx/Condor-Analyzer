@@ -12,11 +12,10 @@ st.markdown("<h2 style='font-size: 2.2rem; margin-bottom: 0rem;'>🛡️ Aegis O
 # --- HIDE STREAMLIT BRANDING ---
 hide_streamlit_style = """
     <style>
-    /* Removed stHeader hiding so the sidebar expand arrow remains visible */
     [data-testid="stToolbar"] {display: none !important;}
     footer {display: none !important;}
     div[class^="viewerBadge"] {display: none !important;}
-    .block-container {padding-top: 1rem !important;}
+    /* Removed the forced 1rem top padding so the title drops down to a safe height */
     </style>
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
