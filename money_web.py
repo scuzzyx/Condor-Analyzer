@@ -84,9 +84,9 @@ def calculate_volume_nodes(hist, current_price, bins=30):
         upper = sorted([p for p in peaks if p > current_price])
         lower = sorted([p for p in peaks if p < current_price])
         r1 = f"${upper[0]:.2f}" if len(upper) > 0 else "Sky (None)"
-        r2 = f"${upper[1]:.2f}" if len(upper) > 1 else "⚠️ No 90d Wall"
+        r2 = f"${upper[1]:.2f}" if len(upper) > 1 else "⚠️ No Wall"
         s1 = f"${lower[-1]:.2f}" if len(lower) > 0 else "Freefall (None)"
-        s2 = f"${lower[-2]:.2f}" if len(lower) > 1 else "⚠️ No 90d Wall"
+        s2 = f"${lower[-2]:.2f}" if len(lower) > 1 else "⚠️ No Wall"
         return f"${poc:.2f}", s1, s2, r1, r2
     except:
         return "N/A", "N/A", "N/A", "N/A", "N/A"
@@ -120,7 +120,7 @@ def run_radar_scan(ticker_list, threshold):
     except: pass
     return found_targets
 
-# --- SIDEBAR CONTROLS ---
+# --- SIDEBAR ---
 st.sidebar.header("🛠️ Dashboard Controls")
 url_bench = load_url_bench()
 if 'custom_bench' not in st.session_state:
@@ -153,7 +153,6 @@ else:
 prob_target = st.sidebar.selectbox("Probability Target:", options=list(Z_SCORES.keys()), index=4)
 z_score = Z_SCORES[prob_target]
 
-# --- RADAR SCANNER ---
 st.sidebar.markdown("---")
 st.sidebar.subheader("📡 Range-Bound Radar")
 st.sidebar.caption("Scan restricted to the Top 50 highest options liquidity stocks.")
@@ -259,9 +258,19 @@ for symbol in selected_tickers:
         with st.expander(f"{symbol} | Price: ${current_price:.2f} | Risk: {risk}", expanded=False):
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Change", f"${current_price:.2f}", f"{change_pct:.2f}%")
+            # Using delta_color="inverse" for Put Strategy (Red/Green swap)
             c2.metric("Put Strategy", f"${put_strike}", f"Trip: ${put_trip}", delta_color="inverse")
             c3.metric("Call Strategy", f"${call_strike}", f"Trip: ${call_trip}", delta_color="normal")
-            c4.metric("Market Data", f"IV: {atm_iv}", f"Earnings: {earnings_date}")
+            
+            # Using st.markdown for the Market column to ensure neutral gray coloring
+            with c4:
+                st.markdown(f"""
+                <div style="line-height: 1.4;">
+                    <span style="font-size: 0.8rem; color: #a6a6a6;">Market Data</span><br>
+                    <span style="font-size: 1.8rem; font-weight: bold;">{atm_iv} IV</span><br>
+                    <span style="font-size: 0.9rem; color: #a6a6a6;">Earnings: {earnings_date}</span>
+                </div>
+                """, unsafe_allow_html=True)
             
             st.markdown("---")
             v1, v2, v3, v4 = st.columns(4)
@@ -277,19 +286,17 @@ for symbol in selected_tickers:
                 st.write(f"14D: {rsi_14:.1f} ({get_s(rsi_14)})")
             with v3:
                 st.caption("🔴 Put Defense (Red)")
-                st.write(f"W1: {sup1}")
-                st.write(f"W2: {sup2}")
+                st.write(f"**Put Wall 1:** {sup1}")
+                st.write(f"**Put Wall 2:** {sup2}")
             with v4:
                 st.caption("🟢 Call Defense (Green)")
-                st.write(f"W1: {res1}")
-                st.write(f"W2: {res2}")
+                st.write(f"**Call Wall 1:** {res1}")
+                st.write(f"**Call Wall 2:** {res2}")
 
             fig = go.Figure(data=[go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'], name="Price")])
             fig.add_trace(go.Scatter(x=hist.index, y=hist['Close'].ewm(span=8, adjust=False).mean(), line=dict(color='#ff9900', width=1.5, dash='dot'), name="8-EMA"))
             fig.add_hline(y=call_strike, line_width=2, line_color="green", annotation_text="Call Strike")
             fig.add_hline(y=put_strike, line_width=2, line_color="red", annotation_text="Put Strike")
-            fig.add_hline(y=call_trip, line_width=1, line_dash="dash", line_color="yellow", annotation_text="Call Alert")
-            fig.add_hline(y=put_trip, line_width=1, line_dash="dash", line_color="yellow", annotation_text="Put Alert")
             fig.update_layout(template="plotly_dark", height=400, margin=dict(l=0, r=0, t=30, b=0), xaxis_rangeslider_visible=False)
             st.plotly_chart(fig, use_container_width=True)
     except Exception as e:
