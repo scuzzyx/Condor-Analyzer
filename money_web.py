@@ -6,8 +6,8 @@ from datetime import datetime, timedelta
 import plotly.graph_objects as go
 
 # --- CONFIG & THEME ---
-st.set_page_config(page_title="Condor-Tool", layout="wide", initial_sidebar_state="expanded")
-st.title("📊 Condor-Tool | Volatility & Probability Screener")
+st.set_page_config(page_title="Aegis Option Scanner", layout="wide", initial_sidebar_state="expanded")
+st.title("🛡️ Aegis Option Scanner | Volatility & Directional Edge")
 
 # --- HIDE STREAMLIT BRANDING ---
 hide_streamlit_style = """
