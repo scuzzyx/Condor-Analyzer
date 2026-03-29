@@ -168,11 +168,11 @@ st.markdown("---")
 with st.expander("📖 Terminal Indicator Glossary (Quick Reference)", expanded=False):
     st.subheader("🚦 Title Risk & Veto Signals")
     st.write("- **⛔ *DO NOT TRADE* (Earnings Veto):** Earnings report occurs before expiration. Stay out.")
-    st.write("- **🔴 *FALLING KNIFE* (Wait for Reclaim):** Price below 8-EMA. Don't sell puts yet.")
+    st.write("- **🔴 *FALLING KNIFE* (Bearish Momentum):** Price below 8-EMA. Consider Call Spreads only.")
     st.write("- **🟠 *GAP RISK* (Overnight Vol):** Historical tendency to jump >1.5% overnight.")
-    st.write("- **🟡 *TRENDING* (Directional Alert):** High ADX (>25). Neutral Condors are high risk.")
-    st.write("- **🟢 *FLOOR CONFIRMED* (Sellers Exhausted):** 8-EMA Reclaimed & momentum hooked up.")
-    st.write("- **🟢 *NEUTRAL CHOP* (Condor Territory):** Ideal sideways environment.")
+    st.write("- **🟡 *TRENDING* (High ADX):** ADX (>25). Stock is moving fast; pick a directional spread. Avoid Condors.")
+    st.write("- **🟢 *FLOOR CONFIRMED* (Bullish Reversal):** 8-EMA Reclaimed. Consider Put Spreads only.")
+    st.write("- **🟢 *NEUTRAL CHOP* (Condor Territory):** Ideal sideways environment for Iron Condors.")
     
     g1, g2 = st.columns(2)
     with g1:
@@ -250,12 +250,13 @@ for symbol in selected_tickers:
                 if datetime.now() < e_date < selected_date: earnings_veto = True
         except: pass
             
+        # --- THE NEW ACTIONABLE RISK LOGIC ---
         if earnings_veto: risk = "⛔ ***DO NOT TRADE*** (Earnings Veto)"
-        elif current_price < ema_8 and rsi_14 < 45: risk = "🔴 ***FALLING KNIFE***: Price below 8-EMA (Wait)"
-        elif current_price > ema_8 and rsi_5 > rsi_5_prev and rsi_14 < 50: risk = "🟢 ***FLOOR CONFIRMED***: Sellers Exhausted"
+        elif current_price < ema_8 and rsi_14 < 45: risk = "🔴 ***FALLING KNIFE***: Consider Call Spreads Only"
+        elif current_price > ema_8 and rsi_5 > rsi_5_prev and rsi_14 < 50: risk = "🟢 ***FLOOR CONFIRMED***: Consider Put Spreads Only"
         elif gap_risk > 1.5: risk = f"🟠 ***GAP RISK***: High Overnight Vol ({gap_risk:.2f}%)"
-        elif adx_14 > 25: risk = f"🟡 ***TRENDING***: ADX {adx_14:.1f} (High Trend)"
-        elif current_price > ma_20: risk = "🟢 ***NEUTRAL CHOP***: Favorable"
+        elif adx_14 > 25: risk = f"🟡 ***TRENDING***: ADX {adx_14:.1f} (Pick a Directional Spread)"
+        elif current_price > ma_20: risk = "🟢 ***NEUTRAL CHOP***: Iron Condor Territory"
         else: risk = "🟡 ***MED RISK***: Price Stalling"
 
         with st.expander(f"{symbol} | Price: ${current_price:.2f} | Risk: {risk}", expanded=False):
@@ -308,11 +309,4 @@ for symbol in selected_tickers:
 
             fig = go.Figure(data=[go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'], name="Price")])
             fig.add_trace(go.Scatter(x=hist.index, y=hist['Close'].ewm(span=8, adjust=False).mean(), line=dict(color='#ff9900', width=1.5, dash='dot'), name="8-EMA"))
-            fig.add_hline(y=call_strike, line_width=2, line_color="green", annotation_text="Call Strike")
-            fig.add_hline(y=put_strike, line_width=2, line_color="red", annotation_text="Put Strike")
-            fig.add_hline(y=call_trip, line_width=1, line_dash="dash", line_color="yellow", annotation_text="Call Alert")
-            fig.add_hline(y=put_trip, line_width=1, line_dash="dash", line_color="yellow", annotation_text="Put Alert")
-            fig.update_layout(template="plotly_dark", height=400, margin=dict(l=0, r=0, t=30, b=0), xaxis_rangeslider_visible=False)
-            st.plotly_chart(fig, use_container_width=True)
-    except Exception as e:
-        st.error(f"Error loading {symbol}")
+            fig.add_hline(y=call_strike, line_width
