@@ -12,24 +12,19 @@ st.markdown("<h2 style='font-size: 2.2rem; margin-bottom: 0rem;'>🛡️ Aegis O
 # --- HIDE STREAMLIT BRANDING ---
 hide_streamlit_style = """
     <style>
-    /* Make the full-width header bar transparent so it doesn't block your background */
-    [data-testid="stHeader"] {
-        background-color: transparent !important;
-    }
-    
-    /* Surgically hide ONLY the right-side Streamlit menu and deploy button */
+    /* Surgically target and kill ONLY the right-side menu */
     [data-testid="stToolbar"] {
         display: none !important;
     }
     
-    /* Hide the footer */
+    /* Kill the footer */
     footer {
         display: none !important;
     }
     
-    /* Push the app down slightly so your title doesn't overlap with the sidebar arrow */
+    /* Give the title a safe amount of breathing room from the top */
     .block-container {
-        padding-top: 3rem !important;
+        padding-top: 3.5rem !important;
     }
     </style>
 """
