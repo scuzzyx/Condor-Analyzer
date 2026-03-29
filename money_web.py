@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 
 # --- CONFIG & THEME ---
 st.set_page_config(page_title="Aegis Option Scanner", layout="wide", initial_sidebar_state="expanded")
-st.title("🛡️ Aegis Option Scanner | Volatility & Directional Edge")
+st.markdown("<h2 style='font-size: 2.2rem; margin-bottom: 0rem;'>🛡️ Aegis Option Scanner | Volatility & Directional Edge</h2>", unsafe_allow_html=True)
 
 # --- HIDE STREAMLIT BRANDING ---
 hide_streamlit_style = """
