@@ -9,6 +9,24 @@ import plotly.graph_objects as go
 st.set_page_config(page_title="Condor-Tool", layout="wide", initial_sidebar_state="expanded")
 st.title("📊 Condor-Tool | Volatility & Probability Screener")
 
+# --- CUSTOM CSS FOR YELLOW TRIP WIRES (THE FIX) ---
+# We inject a CSS rule that hides the standard arrow for all metric deltas
+# and forces the font color to yellow, overriding standard logic.
+yellow_metric_css = """
+<style>
+/* targets the trip wire line specifically */
+[data-testid="stMetricDelta"] {
+    color: #ff9900 !important;
+    background-color: transparent !important;
+}
+/* hides the arrow icons for both put and call strategies */
+[data-testid="stMetricDelta"] > div {
+    display: none !important;
+}
+</style>
+"""
+st.markdown(yellow_metric_css, unsafe_allow_html=True)
+
 # --- HIDE STREAMLIT BRANDING ---
 hide_streamlit_style = """
     <style>
@@ -17,14 +35,6 @@ hide_streamlit_style = """
     footer {display: none !important;}
     div[class^="viewerBadge"] {display: none !important;}
     .block-container {padding-top: 1rem !important;}
-    /* Targeted style to make all metric deltas yellow without arrows */
-    [data-testid="stMetricDelta"] {
-        color: #ff9900 !important;
-        background-color: transparent !important;
-    }
-    [data-testid="stMetricDelta"] > div {
-        display: none !important; /* Hides the arrow icons */
-    }
     </style>
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
@@ -267,11 +277,13 @@ for symbol in selected_tickers:
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Change", f"${current_price:.2f}", f"{change_pct:.2f}%")
             
-            # Simplified metric setup. CSS handles forcing delta to yellow and removing arrows.
+            # --- THE FIX ---
+            # We set standard delta color logic to "off" to make the text appear gray.
+            # BUT, the CSS rule in Part 1 targets this element ([data-testid="stMetricDelta"]),
+            # forces the color to yellow, and hides the standard arrow.
             c2.metric("Put Strategy", f"${put_strike}", f"Trip: ${put_trip}", delta_color="off")
             c3.metric("Call Strategy", f"${call_strike}", f"Trip: ${call_trip}", delta_color="off")
             
-            # Using st.markdown for the Market column to ensure neutral gray coloring
             with c4:
                 st.markdown(f"""
                 <div style="line-height: 1.4;">
