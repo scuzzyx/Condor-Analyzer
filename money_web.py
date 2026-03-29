@@ -344,23 +344,36 @@ for symbol in selected_tickers:
             
             st.markdown("---")
             
+            # Replaced emojis with words for the RSI Stack
             def get_rsi_state(val):
-                if pd.isna(val): return "⚪"
-                elif val >= 70: return "🔥"
-                elif val <= 30: return "🧊"
-                else: return "⚪"
+                if pd.isna(val): return "Neutral"
+                elif val >= 70: return "Overbought"
+                elif val <= 30: return "Oversold"
+                else: return "Neutral"
                 
             v1, v2, v3, v4 = st.columns(4)
-            v1.metric("🧲 Point of Control (POC)", poc, "Highest Vol Magnet", delta_color="off")
+            
+            # Transformed all metrics to clean, stacked text formatting
+            with v1:
+                st.caption("🧲 Point of Control (POC)")
+                st.write(f"**Price:** {poc}")
+                st.write("*(Highest Vol Magnet)*")
             
             with v2:
                 st.caption("📈 RSI Momentum Stack")
-                st.write(f"**5-Day:** {rsi_5:.1f} {get_rsi_state(rsi_5)}")
-                st.write(f"**9-Day:** {rsi_9:.1f} {get_rsi_state(rsi_9)}")
-                st.write(f"**14-Day:** {rsi_14:.1f} {get_rsi_state(rsi_14)}")
+                st.write(f"**5-Day:** {rsi_5:.1f} - {get_rsi_state(rsi_5)}")
+                st.write(f"**9-Day:** {rsi_9:.1f} - {get_rsi_state(rsi_9)}")
+                st.write(f"**14-Day:** {rsi_14:.1f} - {get_rsi_state(rsi_14)}")
                 
-            v3.metric("🟢 Put Defense (Floors)", f"Wall 1: {sup1}", f"Wall 2: {sup2}", delta_color="off")
-            v4.metric("🔴 Call Defense (Ceilings)", f"Wall 1: {res1}", f"Wall 2: {res2}", delta_color="off")
+            with v3:
+                st.caption("🟢 Put Defense (Floors)")
+                st.write(f"**Wall 1:** {sup1}")
+                st.write(f"**Wall 2:** {sup2}")
+                
+            with v4:
+                st.caption("🔴 Call Defense (Ceilings)")
+                st.write(f"**Wall 1:** {res1}")
+                st.write(f"**Wall 2:** {res2}")
 
             fig = go.Figure(data=[go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'], name="Price")])
             
