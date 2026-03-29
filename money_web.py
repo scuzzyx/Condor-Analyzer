@@ -10,25 +10,7 @@ st.set_page_config(page_title="Aegis Option Scanner", layout="wide", initial_sid
 st.markdown("<h2 style='font-size: 2.2rem; margin-bottom: 0rem;'>🛡️ Aegis Option Scanner | Volatility & Directional Edge</h2>", unsafe_allow_html=True)
 
 # --- HIDE STREAMLIT BRANDING ---
-hide_streamlit_style = """
-    <style>
-    /* Surgically target and kill ONLY the right-side menu */
-    [data-testid="stToolbar"] {
-        display: none !important;
-    }
-    
-    /* Kill the footer */
-    footer {
-        display: none !important;
-    }
-    
-    /* Give the title a safe amount of breathing room from the top */
-    .block-container {
-        padding-top: 3.5rem !important;
-    }
-    </style>
-"""
-st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+
 
 
 # --- PROBABILITY Z-SCORES ---
