@@ -12,23 +12,29 @@ st.markdown("<h2 style='font-size: 2.2rem; margin-bottom: 0rem;'>🛡️ Aegis O
 # --- HIDE STREAMLIT BRANDING ---
 hide_streamlit_style = """
     <style>
-    /* Hide the right-side top menu and deploy button */
-    [data-testid="stToolbar"] {display: none !important;}
+    /* Make the full-width header bar transparent so it doesn't block your background */
+    [data-testid="stHeader"] {
+        background-color: transparent !important;
+    }
     
-    /* Hide the footer and viewer badge */
-    footer {display: none !important;}
-    div[class^="viewerBadge"] {display: none !important;}
+    /* Surgically hide ONLY the right-side Streamlit menu and deploy button */
+    [data-testid="stToolbar"] {
+        display: none !important;
+    }
     
-    /* Make the header transparent so it doesn't block the background */
-    [data-testid="stHeader"] {background-color: transparent !important;}
+    /* Hide the footer */
+    footer {
+        display: none !important;
+    }
     
-    /* Force the sidebar arrow to stay on top of everything */
-    [data-testid="collapsedControl"] {
-        z-index: 999999 !important;
+    /* Push the app down slightly so your title doesn't overlap with the sidebar arrow */
+    .block-container {
+        padding-top: 3rem !important;
     }
     </style>
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+
 
 # --- PROBABILITY Z-SCORES ---
 Z_SCORES = {
