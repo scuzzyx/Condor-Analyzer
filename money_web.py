@@ -211,6 +211,9 @@ for symbol in selected_tickers:
         prev_close = hist['Close'].iloc[-2]
         change_dlr, change_pct = current_price - prev_close, ((current_price - prev_close) / prev_close) * 100
         
+        # Color logic specifically targeting the delta text
+        change_color = "#ff4b4b" if change_dlr < 0 else "#09ab3b"
+        
         ma_20 = hist['Close'].rolling(window=20).mean().iloc[-1]
         ema_8 = hist['Close'].ewm(span=8, adjust=False).mean().iloc[-1]
         support_3mo = hist['Close'].min()
@@ -258,30 +261,29 @@ for symbol in selected_tickers:
         with st.expander(f"{symbol} | Price: ${current_price:.2f} | Risk: {risk}", expanded=False):
             c1, c2, c3, c4 = st.columns(4)
             
-            # Column 1: Price Change
-            c1.metric("Today's Change", f"${current_price:.2f}", f"{change_pct:.2f}%")
-            
-            # Helper function for neutral gray text blocks
-            def neutral_box(label, value, sub_value):
+            # Master formatting helper for perfect UI alignment
+            def custom_metric_box(label, value, sub_value, val_color="#FAFAFA", sub_color="#a6a6a6"):
                 return f"""
-                <div style="line-height: 1.4; margin-bottom: 10px;">
-                    <span style="font-size: 0.8rem; color: #a6a6a6;">{label}</span><br>
-                    <span style="font-size: 1.8rem; font-weight: bold;">{value}</span><br>
-                    <span style="font-size: 0.9rem; color: #a6a6a6;">{sub_value}</span>
+                <div style="line-height: 1.4; margin-bottom: 14px;">
+                    <span style="font-size: 0.85rem; color: #a6a6a6; font-family: sans-serif;">{label}</span><br>
+                    <span style="font-size: 1.8rem; font-weight: 600; color: {val_color}; font-family: sans-serif;">{value}</span><br>
+                    <span style="font-size: 0.9rem; font-weight: 500; color: {sub_color}; font-family: sans-serif;">{sub_value}</span>
                 </div>
                 """
 
-            # Column 2: Put Strategy (HTML for neutral styling)
+            # Column 1: Main price white, dollar/pct change colored native Red/Green
+            with c1:
+                st.markdown(custom_metric_box("Today's Change", f"${current_price:.2f}", f"{change_dlr:+.2f} ({change_pct:+.2f}%)", sub_color=change_color), unsafe_allow_html=True)
+
+            # Columns 2 & 3: Strike price white, Trip Wire brightly colored Yellow (#ffcc00)
             with c2:
-                st.markdown(neutral_box("Put Strategy", f"${put_strike}", f"Trip Wire: ${put_trip}"), unsafe_allow_html=True)
-                
-            # Column 3: Call Strategy (HTML for neutral styling)
+                st.markdown(custom_metric_box("Put Strategy", f"${put_strike}", f"Trip Wire: ${put_trip}", sub_color="#ffcc00"), unsafe_allow_html=True)
             with c3:
-                st.markdown(neutral_box("Call Strategy", f"${call_strike}", f"Trip Wire: ${call_trip}"), unsafe_allow_html=True)
+                st.markdown(custom_metric_box("Call Strategy", f"${call_strike}", f"Trip Wire: ${call_trip}", sub_color="#ffcc00"), unsafe_allow_html=True)
             
-            # Column 4: Market Data (HTML for neutral styling)
+            # Column 4: Entirely neutral Market Data
             with c4:
-                st.markdown(neutral_box("Market Data", f"{atm_iv} IV", f"Earnings: {earnings_date}"), unsafe_allow_html=True)
+                st.markdown(custom_metric_box("Market Data", f"{atm_iv} IV", f"Earnings: {earnings_date}"), unsafe_allow_html=True)
             
             st.markdown("---")
             v1, v2, v3, v4 = st.columns(4)
@@ -308,6 +310,8 @@ for symbol in selected_tickers:
             fig.add_trace(go.Scatter(x=hist.index, y=hist['Close'].ewm(span=8, adjust=False).mean(), line=dict(color='#ff9900', width=1.5, dash='dot'), name="8-EMA"))
             fig.add_hline(y=call_strike, line_width=2, line_color="green", annotation_text="Call Strike")
             fig.add_hline(y=put_strike, line_width=2, line_color="red", annotation_text="Put Strike")
+            fig.add_hline(y=call_trip, line_width=1, line_dash="dash", line_color="yellow", annotation_text="Call Alert")
+            fig.add_hline(y=put_trip, line_width=1, line_dash="dash", line_color="yellow", annotation_text="Put Alert")
             fig.update_layout(template="plotly_dark", height=400, margin=dict(l=0, r=0, t=30, b=0), xaxis_rangeslider_visible=False)
             st.plotly_chart(fig, use_container_width=True)
     except Exception as e:
