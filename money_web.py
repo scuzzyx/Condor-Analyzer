@@ -266,7 +266,7 @@ for symbol in selected_tickers:
         # --- MULTI-TIMEFRAME RSI MATH ---
         rsi_series_5 = calculate_rsi(hist['Close'], periods=5)
         rsi_5 = rsi_series_5.iloc[-1]
-        rsi_5_prev = rsi_series_5.iloc[-2] # Used to detect the "hook"
+        rsi_5_prev = rsi_series_5.iloc[-2]
         
         rsi_9 = calculate_rsi(hist['Close'], periods=9).iloc[-1]
         rsi_14 = calculate_rsi(hist['Close'], periods=14).iloc[-1]
@@ -304,12 +304,10 @@ for symbol in selected_tickers:
         try:
             cal = t.calendar
             e_date = None
-            
             if isinstance(cal, dict) and 'Earnings Date' in cal and cal['Earnings Date']:
                 e_date = cal['Earnings Date'][0]
             elif isinstance(cal, pd.DataFrame) and not cal.empty and 'Earnings Date' in cal.index:
                 e_date = cal.loc['Earnings Date'][0]
-                
             if e_date:
                 e_date = pd.to_datetime(e_date) 
                 earnings_date = e_date.strftime('%Y-%m-%d')
@@ -318,7 +316,7 @@ for symbol in selected_tickers:
         except:
             pass
             
-        # --- THE NEW BINARY EXHAUSTION / RISK SYSTEM ---
+        # --- BINARY RISK SYSTEM ---
         if earnings_veto:
             risk = "⛔ VETO: Earnings Before Expiration"
         elif current_price < ema_8 and rsi_14 < 45:
@@ -338,13 +336,13 @@ for symbol in selected_tickers:
         with st.expander(f"{symbol}  |  Price: ${current_price:.2f}  |  Risk: {risk}", expanded=False):
             col1, col2, col3, col4 = st.columns(4)
             col1.metric("Today's Change", f"${current_price:.2f}", f"{change_dlr:.2f} ({change_pct:.2f}%)")
-            col2.metric("Put Strategy", f"Strike: ${put_strike}", f"Trip Wire: ${put_trip}", delta_color="off")
-            col3.metric("Call Strategy", f"Strike: ${call_strike}", f"Trip Wire: ${call_trip}", delta_color="off")
+            # --- SWAPPED COLOR INDICATORS IN METRICS ---
+            col2.metric("Put Strategy", f"Strike: ${put_strike}", f"Trip Wire: ${put_trip}", delta_color="inverse")
+            col3.metric("Call Strategy", f"Strike: ${call_strike}", f"Trip Wire: ${call_trip}", delta_color="normal")
             col4.metric("Market Data", f"IV: {atm_iv}", f"Earnings: {earnings_date}", delta_color="off")
             
             st.markdown("---")
             
-            # Replaced emojis with words for the RSI Stack
             def get_rsi_state(val):
                 if pd.isna(val): return "Neutral"
                 elif val >= 70: return "Overbought"
@@ -353,7 +351,6 @@ for symbol in selected_tickers:
                 
             v1, v2, v3, v4 = st.columns(4)
             
-            # Transformed all metrics to clean, stacked text formatting
             with v1:
                 st.caption("🧲 Point of Control (POC)")
                 st.write(f"**Price:** {poc}")
@@ -366,23 +363,25 @@ for symbol in selected_tickers:
                 st.write(f"**14-Day:** {rsi_14:.1f} - {get_rsi_state(rsi_14)}")
                 
             with v3:
-                st.caption("🟢 Put Defense (Floors)")
+                # --- COLOR SWAP: PUT RED ---
+                st.caption("🔴 Put Defense (Floors)")
                 st.write(f"**Wall 1:** {sup1}")
                 st.write(f"**Wall 2:** {sup2}")
                 
             with v4:
-                st.caption("🔴 Call Defense (Ceilings)")
+                # --- COLOR SWAP: CALL GREEN ---
+                st.caption("🟢 Call Defense (Ceilings)")
                 st.write(f"**Wall 1:** {res1}")
                 st.write(f"**Wall 2:** {res2}")
 
             fig = go.Figure(data=[go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'], name="Price")])
             
-            # --- ADDING THE NEW 8-EMA LINE TO THE CHART ---
             ema_8_series = hist['Close'].ewm(span=8, adjust=False).mean()
             fig.add_trace(go.Scatter(x=hist.index, y=ema_8_series, line=dict(color='#ff9900', width=1.5, dash='dot'), name="8-Day EMA (Trend)"))
             
-            fig.add_hline(y=call_strike, line_width=2, line_color="red", annotation_text="Call Strike")
-            fig.add_hline(y=put_strike, line_width=2, line_color="green", annotation_text="Put Strike")
+            # --- SWAPPED PLOTLY LINE COLORS ---
+            fig.add_hline(y=call_strike, line_width=2, line_color="green", annotation_text="Call Strike")
+            fig.add_hline(y=put_strike, line_width=2, line_color="red", annotation_text="Put Strike")
             fig.add_hline(y=call_trip, line_width=1, line_dash="dash", line_color="yellow", annotation_text="Call Alert")
             fig.add_hline(y=put_trip, line_width=1, line_dash="dash", line_color="yellow", annotation_text="Put Alert")
             
