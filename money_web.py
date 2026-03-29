@@ -12,7 +12,7 @@ st.markdown("<h2 style='font-size: 2.2rem; margin-bottom: 0rem;'>🛡️ Aegis O
 # --- HIDE STREAMLIT BRANDING ---
 hide_streamlit_style = """
     <style>
-    [data-testid="stHeader"] {display: none !important;}
+    /* Removed stHeader hiding so the sidebar expand arrow remains visible */
     [data-testid="stToolbar"] {display: none !important;}
     footer {display: none !important;}
     div[class^="viewerBadge"] {display: none !important;}
