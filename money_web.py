@@ -188,7 +188,8 @@ for symbol in selected_tickers:
         
         rsi_series_5 = calculate_rsi(hist['Close'], periods=5)
         rsi_5, rsi_5_prev = rsi_series_5.iloc[-1], rsi_series_5.iloc[-2]
-        rsi_9, rsi_14 = calculate_rsi(hist['Close'], periods=9).iloc[-1], calculate_rsi(hist['Close'], periods=14).iloc[-1]
+        rsi_9 = calculate_rsi(hist['Close'], periods=9).iloc[-1]
+        rsi_14 = calculate_rsi(hist['Close'], periods=14).iloc[-1]
         
         adx_14, gap_risk = calculate_adx(hist), calculate_gap_risk(hist)
         poc, sup1, sup2, res1, res2 = calculate_volume_nodes(hist, current_price)
@@ -198,12 +199,23 @@ for symbol in selected_tickers:
         put_strike, call_strike = round(current_price - expected_move), round(current_price + expected_move)
         put_trip, call_trip = round(put_strike * 1.05, 2), round(call_strike * 0.95, 2)
         
-        # Risk Logic
+        atm_iv = "N/A"
+        try:
+            if selected_date_str:
+                chain = t.option_chain(selected_date_str)
+                calls = chain.calls
+                atm_call = calls.iloc[(calls['strike'] - current_price).abs().argsort()[:1]]
+                atm_iv = f"{atm_call['impliedVolatility'].values[0] * 100:.1f}%"
+        except: pass
+
+        earnings_date = "Not scheduled"
         earnings_veto = False
         try:
             cal = t.calendar
             e_date = pd.to_datetime(cal.get('Earnings Date')[0]) if isinstance(cal, dict) else pd.to_datetime(cal.loc['Earnings Date'][0])
-            if datetime.now() < e_date < selected_date: earnings_veto = True
+            if e_date:
+                earnings_date = e_date.strftime('%Y-%m-%d')
+                if datetime.now() < e_date < selected_date: earnings_veto = True
         except: pass
             
         if earnings_veto: risk = "⛔ ***DO NOT TRADE*** (Earnings Veto)"
@@ -219,7 +231,7 @@ for symbol in selected_tickers:
             c1.metric("Change", f"${current_price:.2f}", f"{change_pct:.2f}%")
             c2.metric("Put Strategy", f"${put_strike}", f"Trip: ${put_trip}", delta_color="inverse")
             c3.metric("Call Strategy", f"${call_strike}", f"Trip: ${call_trip}", delta_color="normal")
-            c4.metric("Market", f"ADX: {adx_14:.1f}", f"DTE: {dte}")
+            c4.metric("Market Data", f"IV: {atm_iv}", f"Earnings: {earnings_date}")
             
             st.markdown("---")
             v1, v2, v3, v4 = st.columns(4)
@@ -227,10 +239,12 @@ for symbol in selected_tickers:
             with v1:
                 st.caption("🧲 POC")
                 st.write(f"**Price:** {poc}")
+                st.write(f"**ADX:** {adx_14:.1f}")
             with v2:
                 st.caption("📈 RSI Stack")
                 st.write(f"5D: {rsi_5:.1f} ({get_s(rsi_5)})")
                 st.write(f"9D: {rsi_9:.1f} ({get_s(rsi_9)})")
+                st.write(f"14D: {rsi_14:.1f} ({get_s(rsi_14)})")
             with v3:
                 st.caption("🔴 Put Defense")
                 st.write(f"W1: {sup1}")
