@@ -101,6 +101,25 @@ def get_friday_expirations():
     except:
         return [(datetime.now() + timedelta(days=i)).strftime('%Y-%m-%d') for i in range(14, 60) if (datetime.now() + timedelta(days=i)).weekday() == 4]
 
+@st.cache_data(ttl=3600) 
+def run_radar_scan(ticker_list, threshold):
+    found_targets = []
+    try:
+        bulk_data = yf.download(ticker_list, period="1mo", group_by='ticker', progress=False)
+        for sym in ticker_list:
+            try:
+                if len(ticker_list) > 1:
+                    hist = bulk_data[sym]['Close'].dropna()
+                else:
+                    hist = bulk_data['Close'].dropna()
+                if len(hist) > 10:
+                    h, l = hist.max(), hist.min()
+                    cur = hist.iloc[-1]
+                    if (h - l) / cur < threshold: found_targets.append(sym)
+            except: continue
+    except: pass
+    return found_targets
+
 # --- SIDEBAR CONTROLS ---
 st.sidebar.header("🛠️ Dashboard Controls")
 url_bench = load_url_bench()
@@ -122,19 +141,29 @@ if st.sidebar.button("🔗 Generate Custom Link"):
     st.query_params["bench"] = ",".join(st.session_state['active_selections'])
     st.sidebar.success("URL updated!")
 
+st.sidebar.markdown("---")
 available_fridays = get_friday_expirations()
 if available_fridays:
     selected_date_str = st.sidebar.selectbox("Expiration:", options=available_fridays)
     selected_date = datetime.strptime(selected_date_str, '%Y-%m-%d')
     dte = (selected_date - datetime.now()).days
 else:
-    dte = 14
-    selected_date_str = None
+    dte, selected_date_str = 14, None
 
 prob_target = st.sidebar.selectbox("Probability Target:", options=list(Z_SCORES.keys()), index=4)
 z_score = Z_SCORES[prob_target]
 
-# --- INDICATOR REFERENCE GLOSSARY ---
+# --- RADAR SCANNER ---
+st.sidebar.markdown("---")
+st.sidebar.subheader("📡 Range-Bound Radar")
+LIQUID_50 = ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA', 'AMD', 'PLTR', 'NFLX', 'BA', 'DIS', 'BABA', 'UBER', 'COIN', 'HOOD', 'INTC', 'MU', 'AVGO', 'TSM', 'JPM', 'BAC', 'C', 'V', 'MA', 'PYPL', 'SQ', 'WMT', 'TGT', 'COST', 'HD', 'SBUX', 'NKE', 'MCD', 'XOM', 'CVX', 'CAT', 'GE', 'JNJ', 'PFE', 'UNH', 'LLY', 'CMCSA', 'VZ', 'T', 'QCOM', 'CRM', 'SNOW', 'SHOP', 'SPOT']
+scan_tol = st.sidebar.slider("Tolerance (%)", 3, 15, 8) / 100.0
+if st.sidebar.button("Run Radar Scan Now"):
+    targets = run_radar_scan(LIQUID_50, scan_tol)
+    if targets: st.sidebar.success(f"🎯 Found: {', '.join(targets)}")
+    else: st.sidebar.warning("No targets.")
+
+    # --- INDICATOR REFERENCE GLOSSARY ---
 st.markdown("---")
 with st.expander("📖 Terminal Indicator Glossary (Quick Reference)", expanded=False):
     st.subheader("🚦 Title Risk & Veto Signals")
@@ -237,7 +266,7 @@ for symbol in selected_tickers:
             v1, v2, v3, v4 = st.columns(4)
             def get_s(v): return "Oversold" if v <= 30 else "Overbought" if v >= 70 else "Neutral"
             with v1:
-                st.caption("🧲 POC")
+                st.caption("🧲 POC & Trend")
                 st.write(f"**Price:** {poc}")
                 st.write(f"**ADX:** {adx_14:.1f}")
             with v2:
@@ -246,18 +275,20 @@ for symbol in selected_tickers:
                 st.write(f"9D: {rsi_9:.1f} ({get_s(rsi_9)})")
                 st.write(f"14D: {rsi_14:.1f} ({get_s(rsi_14)})")
             with v3:
-                st.caption("🔴 Put Defense")
+                st.caption("🔴 Put Defense (Red)")
                 st.write(f"W1: {sup1}")
                 st.write(f"W2: {sup2}")
             with v4:
-                st.caption("🟢 Call Defense")
+                st.caption("🟢 Call Defense (Green)")
                 st.write(f"W1: {res1}")
                 st.write(f"W2: {res2}")
 
             fig = go.Figure(data=[go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'], name="Price")])
             fig.add_trace(go.Scatter(x=hist.index, y=hist['Close'].ewm(span=8, adjust=False).mean(), line=dict(color='#ff9900', width=1.5, dash='dot'), name="8-EMA"))
-            fig.add_hline(y=call_strike, line_width=2, line_color="green", annotation_text="Call")
-            fig.add_hline(y=put_strike, line_width=2, line_color="red", annotation_text="Put")
+            fig.add_hline(y=call_strike, line_width=2, line_color="green", annotation_text="Call Strike")
+            fig.add_hline(y=put_strike, line_width=2, line_color="red", annotation_text="Put Strike")
+            fig.add_hline(y=call_trip, line_width=1, line_dash="dash", line_color="yellow", annotation_text="Call Alert")
+            fig.add_hline(y=put_trip, line_width=1, line_dash="dash", line_color="yellow", annotation_text="Put Alert")
             fig.update_layout(template="plotly_dark", height=400, margin=dict(l=0, r=0, t=30, b=0), xaxis_rangeslider_visible=False)
             st.plotly_chart(fig, use_container_width=True)
     except Exception as e:
