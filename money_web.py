@@ -333,10 +333,22 @@ for symbol in selected_tickers:
             
             st.markdown("---")
             
-            v1, v2, v3 = st.columns(3)
+            # --- THE NEW 4-COLUMN RSI & DEFENSE ROW ---
+            # Determine RSI state text
+            if pd.isna(rsi_14):
+                rsi_state = "⚪ N/A"
+            elif rsi_14 >= 70:
+                rsi_state = "🔥 Overbought"
+            elif rsi_14 <= 30:
+                rsi_state = "🧊 Oversold"
+            else:
+                rsi_state = "⚪ Neutral"
+                
+            v1, v2, v3, v4 = st.columns(4)
             v1.metric("🧲 Point of Control (POC)", poc, "Highest Vol Magnet", delta_color="off")
-            v2.metric("🟢 Put Defense (Floors)", f"Wall 1: {sup1}", f"Wall 2: {sup2}", delta_color="off")
-            v3.metric("🔴 Call Defense (Ceilings)", f"Wall 1: {res1}", f"Wall 2: {res2}", delta_color="off")
+            v2.metric("📈 14-Day RSI", f"{rsi_14:.1f}", rsi_state, delta_color="off")
+            v3.metric("🟢 Put Defense (Floors)", f"Wall 1: {sup1}", f"Wall 2: {sup2}", delta_color="off")
+            v4.metric("🔴 Call Defense (Ceilings)", f"Wall 1: {res1}", f"Wall 2: {res2}", delta_color="off")
 
             fig = go.Figure(data=[go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'], name="Price")])
             
@@ -350,4 +362,3 @@ for symbol in selected_tickers:
 
     except Exception as e:
         st.error(f"Error loading {symbol}. Options data may be missing.")
-
