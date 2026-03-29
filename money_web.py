@@ -119,8 +119,7 @@ def run_radar_scan(ticker_list, threshold):
             except: continue
     except: pass
     return found_targets
-
-# --- SIDEBAR ---
+    # --- SIDEBAR ---
 st.sidebar.header("🛠️ Dashboard Controls")
 url_bench = load_url_bench()
 if 'custom_bench' not in st.session_state:
@@ -163,7 +162,7 @@ if st.sidebar.button("Run Radar Scan Now"):
     if targets: st.sidebar.success(f"🎯 Found: {', '.join(targets)}")
     else: st.sidebar.warning("No targets.")
 
-    # --- INDICATOR REFERENCE GLOSSARY ---
+# --- INDICATOR REFERENCE GLOSSARY ---
 st.markdown("---")
 with st.expander("📖 Terminal Indicator Glossary (Quick Reference)", expanded=False):
     st.subheader("🚦 Title Risk & Veto Signals")
@@ -309,4 +308,11 @@ for symbol in selected_tickers:
 
             fig = go.Figure(data=[go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'], name="Price")])
             fig.add_trace(go.Scatter(x=hist.index, y=hist['Close'].ewm(span=8, adjust=False).mean(), line=dict(color='#ff9900', width=1.5, dash='dot'), name="8-EMA"))
-            fig.add_hline(y=call_strike, line_width
+            fig.add_hline(y=call_strike, line_width=2, line_color="green", annotation_text="Call Strike")
+            fig.add_hline(y=put_strike, line_width=2, line_color="red", annotation_text="Put Strike")
+            fig.add_hline(y=call_trip, line_width=1, line_dash="dash", line_color="yellow", annotation_text="Call Alert")
+            fig.add_hline(y=put_trip, line_width=1, line_dash="dash", line_color="yellow", annotation_text="Put Alert")
+            fig.update_layout(template="plotly_dark", height=400, margin=dict(l=0, r=0, t=30, b=0), xaxis_rangeslider_visible=False)
+            st.plotly_chart(fig, use_container_width=True)
+    except Exception as e:
+        st.error(f"Error loading {symbol}")
