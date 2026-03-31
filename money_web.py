@@ -407,10 +407,12 @@ for symbol in selected_tickers:
 import streamlit as st
 
 if st.sidebar.button("Clear Data Cache"):
-    # Clears data stored via @st.cache_data
+import streamlit as st
+
+if st.sidebar.button("Force Data Refresh"):
+    # 1. Nuke the old cached data
     st.cache_data.clear() 
-    
-    # Clears global resources stored via @st.cache_resource
     st.cache_resource.clear() 
     
-    st.sidebar.success("Cache cleared successfully!")
+    # 2. Force the app to reload instantly (Streamlit v1.27+)
+    st.rerun()
