@@ -167,7 +167,7 @@ with st.expander("📖 Terminal Indicator Glossary (Quick Reference)", expanded=
     st.write("- **🟢 *FLOOR CONFIRMED* (Bullish Reversal):** 8-EMA Reclaimed. Consider Put Spreads only.")
     st.write("- **🟢 *NEUTRAL CHOP* (Condor Territory):** Ideal sideways environment for Iron Condors.")
     
-    g1, g2 = st.columns(2)
+    g1, g2, g3 = st.columns(3)
     with g1:
         st.subheader("🛡️ Trend & Momentum")
         st.write("**8-Day EMA:** The 'Algorithmic Trend' line. Orange dotted line on chart.")
@@ -176,9 +176,14 @@ with st.expander("📖 Terminal Indicator Glossary (Quick Reference)", expanded=
     with g2:
         st.subheader("🎯 Structure & Math")
         st.write("**POC:** Highest volume price point in 90 days. Price magnet.")
-        st.write("**🔴 Support Walls (Floors):** Structural support where buyers step in.")
-        st.write("**🟢 Resistance Walls (Ceilings):** Structural resistance where sellers emerge.")
+        st.write("**🔴 Support Walls:** Structural floor where buyers step in.")
+        st.write("**🟢 Resistance Walls:** Structural ceiling where sellers emerge.")
         st.write("**Z-Score:** Probability math used to set the strike safety margin.")
+    with g3:
+        st.subheader("⚖️ Risk Underwriting")
+        st.write("**Max Pain:** The strike where options sellers lose the least. Acts as a Friday price magnet.")
+        st.write("**P/C OI Ratio:** Put vs Call Open Interest. > 1.2 is Bearish flow, < 0.8 is Bullish flow.")
+        st.write("**Ex-Dividend:** The cutoff date to own the stock for a dividend. High risk for short calls.")
 
 # --- PORTFOLIO CORRELATION ---
 if len(selected_tickers) > 1:
