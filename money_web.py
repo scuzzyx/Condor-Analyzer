@@ -403,3 +403,14 @@ for symbol in selected_tickers:
 
     except Exception as e:
         st.error(f"Error loading {symbol}: {str(e)}")
+
+import streamlit as st
+
+if st.sidebar.button("Clear Data Cache"):
+    # Clears data stored via @st.cache_data
+    st.cache_data.clear() 
+    
+    # Clears global resources stored via @st.cache_resource
+    st.cache_resource.clear() 
+    
+    st.sidebar.success("Cache cleared successfully!")
