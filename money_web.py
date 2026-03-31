@@ -78,7 +78,8 @@ def calculate_volume_nodes(hist, current_price, bins=30):
         return f"${poc:.2f}", s1, s2, r1, r2
     except:
         return "N/A", "N/A", "N/A", "N/A", "N/A"
-        @st.cache_data(ttl=3600)  
+        
+@st.cache_data(ttl=3600)  
 def get_friday_expirations():
     try:
         spy = yf.Ticker("SPY")
