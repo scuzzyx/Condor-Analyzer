@@ -119,16 +119,11 @@ if 'active_selections' not in st.session_state:
 def add_custom_ticker():
     ticker = st.session_state['ticker_input'].upper().strip()
     if ticker:
-        # Add to the underlying options list if it's completely new
         if ticker not in st.session_state['custom_bench']:
             st.session_state['custom_bench'].append(ticker)
-        
-        # Force reassignment to make the multiselect instantly update and run
         if ticker not in st.session_state['active_selections']:
             current_active = st.session_state['active_selections']
             st.session_state['active_selections'] = current_active + [ticker]
-            
-    # Clear the input box after hitting enter
     st.session_state['ticker_input'] = ""
 
 st.sidebar.text_input("➕ Add Custom Ticker:", key="ticker_input", on_change=add_custom_ticker)
@@ -208,7 +203,6 @@ for symbol in selected_tickers:
         prev_close = hist['Close'].iloc[-2]
         change_dlr, change_pct = current_price - prev_close, ((current_price - prev_close) / prev_close) * 100
         
-        # Color logic specifically targeting the delta text
         change_color = "#ff4b4b" if change_dlr < 0 else "#09ab3b"
         
         ma_20 = hist['Close'].rolling(window=20).mean().iloc[-1]
@@ -228,14 +222,22 @@ for symbol in selected_tickers:
         put_strike, call_strike = round(current_price - expected_move), round(current_price + expected_move)
         put_trip, call_trip = round(put_strike * 1.05, 2), round(call_strike * 0.95, 2)
         
+        # --- ROBUST IV EXTRACTION ---
         atm_iv = "N/A"
         try:
-            if selected_date_str:
-                chain = t.option_chain(selected_date_str)
+            valid_dates = t.options
+            if valid_dates:
+                # Fallback to closest valid date if the sidebar date isn't available for this ticker
+                target_date = selected_date_str if selected_date_str in valid_dates else valid_dates[0]
+                chain = t.option_chain(target_date)
                 calls = chain.calls
-                atm_call = calls.iloc[(calls['strike'] - current_price).abs().argsort()[:1]]
-                atm_iv = f"{atm_call['impliedVolatility'].values[0] * 100:.1f}%"
-        except: pass
+                if not calls.empty:
+                    # Mathematically safer indexing using .idxmin() and .loc
+                    closest_idx = (calls['strike'] - current_price).abs().idxmin()
+                    iv_val = calls.loc[closest_idx, 'impliedVolatility']
+                    atm_iv = f"{iv_val * 100:.1f}%"
+        except: 
+            pass
 
         earnings_date = "Not scheduled"
         earnings_veto = False
@@ -247,8 +249,6 @@ for symbol in selected_tickers:
                 if datetime.now() < e_date < selected_date: earnings_veto = True
         except: pass
             
-        # --- THE NEW ACTIONABLE RISK LOGIC ---
-        # Base risk assessment (Earnings veto removed, now an add-on)
         if current_price < ema_8 and rsi_14 < 45: base_risk = "🔴 ***FALLING KNIFE***: Consider Call Spreads Only"
         elif current_price > ema_8 and rsi_5 > rsi_5_prev and rsi_14 < 50: base_risk = "🟢 ***FLOOR CONFIRMED***: Consider Put Spreads Only"
         elif gap_risk > 1.5: base_risk = f"🟠 ***GAP RISK***: High Overnight Vol ({gap_risk:.2f}%)"
@@ -256,13 +256,11 @@ for symbol in selected_tickers:
         elif current_price > ma_20: base_risk = "🟢 ***NEUTRAL CHOP***: Iron Condor Territory"
         else: base_risk = "🟡 ***MED RISK***: Price Stalling"
 
-        # Append earnings warning if applicable
         risk = base_risk + " [EARNINGS SOON]" if earnings_veto else base_risk
 
         with st.expander(f"{symbol} | Price: ${current_price:.2f} | Risk: {risk}", expanded=False):
             c1, c2, c3, c4 = st.columns(4)
             
-            # Master formatting helper for perfect UI alignment
             def custom_metric_box(label, value, sub_value, val_color="#FAFAFA", sub_color="#a6a6a6"):
                 return f"""
                 <div style="line-height: 1.4; margin-bottom: 14px;">
@@ -272,17 +270,12 @@ for symbol in selected_tickers:
                 </div>
                 """
 
-            # Column 1: Main price white, dollar/pct change colored native Red/Green
             with c1:
                 st.markdown(custom_metric_box("Today's Change", f"${current_price:.2f}", f"{change_dlr:+.2f} ({change_pct:+.2f}%)", sub_color=change_color), unsafe_allow_html=True)
-
-            # Columns 2 & 3: Strike price white, Trip Wire brightly colored Yellow (#ffcc00)
             with c2:
                 st.markdown(custom_metric_box("Put Strategy", f"${put_strike}", f"Trip Wire: ${put_trip}", sub_color="#ffcc00"), unsafe_allow_html=True)
             with c3:
                 st.markdown(custom_metric_box("Call Strategy", f"${call_strike}", f"Trip Wire: ${call_trip}", sub_color="#ffcc00"), unsafe_allow_html=True)
-            
-            # Column 4: Entirely neutral Market Data
             with c4:
                 st.markdown(custom_metric_box("Market Data", f"{atm_iv} IV", f"Earnings: {earnings_date}"), unsafe_allow_html=True)
             
