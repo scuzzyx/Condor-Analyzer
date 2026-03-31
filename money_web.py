@@ -227,17 +227,20 @@ for symbol in selected_tickers:
         try:
             valid_dates = t.options
             if valid_dates:
-                # Fallback to closest valid date if the sidebar date isn't available for this ticker
                 target_date = selected_date_str if selected_date_str in valid_dates else valid_dates[0]
                 chain = t.option_chain(target_date)
                 calls = chain.calls
                 if not calls.empty:
-                    # Mathematically safer indexing using .idxmin() and .loc
                     closest_idx = (calls['strike'] - current_price).abs().idxmin()
                     iv_val = calls.loc[closest_idx, 'impliedVolatility']
                     atm_iv = f"{iv_val * 100:.1f}%"
-        except: 
-            pass
+        except: pass
+
+        # --- RECENT NEWS EXTRACTION ---
+        ticker_news = []
+        try:
+            ticker_news = t.news[:3] # Grab the top 3 most recent articles
+        except: pass
 
         earnings_date = "Not scheduled"
         earnings_veto = False
@@ -308,5 +311,17 @@ for symbol in selected_tickers:
             fig.add_hline(y=put_trip, line_width=1, line_dash="dash", line_color="yellow", annotation_text="Put Alert")
             fig.update_layout(template="plotly_dark", height=400, margin=dict(l=0, r=0, t=30, b=0), xaxis_rangeslider_visible=False)
             st.plotly_chart(fig, use_container_width=True)
+
+            # --- THE NEW UI SECTION ---
+            if ticker_news:
+                st.markdown("---")
+                st.caption("📰 Recent Headlines")
+                for item in ticker_news:
+                    try:
+                        pub_time = datetime.fromtimestamp(item['providerPublishTime']).strftime('%b %d, %H:%M')
+                        st.markdown(f"- **[{item['title']}]({item['link']})** *({item['publisher']} - {pub_time})*")
+                    except:
+                        # Fallback in case the timestamp is missing or malformed
+                        st.markdown(f"- **[{item['title']}]({item['link']})**")
     except Exception as e:
         st.error(f"Error loading {symbol}")
