@@ -236,10 +236,12 @@ for symbol in selected_tickers:
                     atm_iv = f"{iv_val * 100:.1f}%"
         except: pass
 
-        # --- RECENT NEWS EXTRACTION ---
+        # --- BULLETPROOF NEWS EXTRACTION ---
         ticker_news = []
         try:
-            ticker_news = t.news[:3] # Grab the top 3 most recent articles
+            news_data = t.news
+            if isinstance(news_data, list):
+                ticker_news = news_data[:3]
         except: pass
 
         earnings_date = "Not scheduled"
@@ -312,16 +314,20 @@ for symbol in selected_tickers:
             fig.update_layout(template="plotly_dark", height=400, margin=dict(l=0, r=0, t=30, b=0), xaxis_rangeslider_visible=False)
             st.plotly_chart(fig, use_container_width=True)
 
-            # --- THE NEW UI SECTION ---
+            # --- THE NEW UI SECTION (BULLETPROOFED) ---
             if ticker_news:
                 st.markdown("---")
                 st.caption("📰 Recent Headlines")
                 for item in ticker_news:
-                    try:
-                        pub_time = datetime.fromtimestamp(item['providerPublishTime']).strftime('%b %d, %H:%M')
-                        st.markdown(f"- **[{item['title']}]({item['link']})** *({item['publisher']} - {pub_time})*")
-                    except:
-                        # Fallback in case the timestamp is missing or malformed
-                        st.markdown(f"- **[{item['title']}]({item['link']})**")
-    except Exception as e:
-        st.error(f"Error loading {symbol}")
+                    if isinstance(item, dict):
+                        title = item.get('title', 'Headline Unavailable')
+                        link = item.get('link', item.get('url', '#'))
+                        publisher = item.get('publisher', 'Finance News')
+                        
+                        try:
+                            if 'providerPublishTime' in item:
+                                pub_time = datetime.fromtimestamp(item['providerPublishTime']).strftime('%b %d, %H:%M')
+                                st.markdown(f"- **[{title}]({link})** *({publisher} - {pub_time})*")
+                            else:
+                                st.markdown(f"- **[{title}]({link})** *({publisher})*")
+                        except
