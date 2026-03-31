@@ -236,7 +236,7 @@ for symbol in selected_tickers:
                     atm_iv = f"{iv_val * 100:.1f}%"
         except: pass
 
-        # --- BULLETPROOF NEWS EXTRACTION ---
+        # --- DEEP-PARSING NEWS EXTRACTION ---
         ticker_news = []
         try:
             news_data = t.news
@@ -314,25 +314,54 @@ for symbol in selected_tickers:
             fig.update_layout(template="plotly_dark", height=400, margin=dict(l=0, r=0, t=30, b=0), xaxis_rangeslider_visible=False)
             st.plotly_chart(fig, use_container_width=True)
 
-            # --- THE NEW UI SECTION (BULLETPROOFED) ---
+            # --- RENDER HEADLINES ---
             if ticker_news:
                 st.markdown("---")
                 st.caption("📰 Recent Headlines")
                 for item in ticker_news:
-                    if isinstance(item, dict):
-                        title = item.get('title', 'Headline Unavailable')
-                        link = item.get('link', item.get('url', '#'))
-                        publisher = item.get('publisher', 'Finance News')
+                    if not isinstance(item, dict): continue
+                    
+                    # Establish baseline fallbacks
+                    title = "Headline Unavailable"
+                    link = "#"
+                    publisher = "Finance News"
+                    pub_time = ""
+                    
+                    # Scenario A: The newer 'content' nested dictionary structure
+                    if 'content' in item and isinstance(item['content'], dict):
+                        content = item['content']
+                        title = content.get('title', title)
                         
-                        try:
-                            if 'providerPublishTime' in item:
+                        # Digging out the hidden URL
+                        if 'clickThroughUrl' in content and isinstance(content['clickThroughUrl'], dict):
+                            link = content['clickThroughUrl'].get('url', link)
+                        elif 'canonicalUrl' in content and isinstance(content['canonicalUrl'], dict):
+                            link = content['canonicalUrl'].get('url', link)
+                            
+                        # Digging out the Publisher
+                        if 'provider' in content and isinstance(content['provider'], dict):
+                            publisher = content['provider'].get('displayName', publisher)
+                            
+                        # Formatting the new ISO date string
+                        if 'pubDate' in content:
+                            try:
+                                dt = pd.to_datetime(content['pubDate'])
+                                pub_time = dt.strftime('%b %d, %H:%M')
+                            except: pass
+                            
+                    # Scenario B: The older, flat dictionary structure
+                    else:
+                        title = item.get('title', title)
+                        link = item.get('link', item.get('url', link))
+                        publisher = item.get('publisher', publisher)
+                        if 'providerPublishTime' in item:
+                            try:
                                 pub_time = datetime.fromtimestamp(item['providerPublishTime']).strftime('%b %d, %H:%M')
-                                st.markdown(f"- **[{title}]({link})** *({publisher} - {pub_time})*")
-                            else:
-                                st.markdown(f"- **[{title}]({link})** *({publisher})*")
-                        except:
-                            st.markdown(f"- **[{title}]({link})**")
+                            except: pass
 
-    # The master error catch now shows EXACTLY what failed.
+                    # Output the clean Markdown link
+                    time_str = f" - {pub_time}" if pub_time else ""
+                    st.markdown(f"- **[{title}]({link})** *({publisher}{time_str})*")
+
     except Exception as e:
         st.error(f"Error loading {symbol}: {str(e)}")
