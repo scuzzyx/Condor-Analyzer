@@ -9,10 +9,6 @@ import plotly.graph_objects as go
 st.set_page_config(page_title="Aegis Option Scanner", layout="wide", initial_sidebar_state="expanded")
 st.markdown("<h2 style='font-size: 2.2rem; margin-bottom: 0rem;'>🛡️ Aegis Option Scanner | Volatility & Directional Edge</h2>", unsafe_allow_html=True)
 
-# --- HIDE STREAMLIT BRANDING ---
-
-
-
 # --- PROBABILITY Z-SCORES ---
 Z_SCORES = {
     "70%": 1.04, "75%": 1.15, "80%": 1.28, 
@@ -111,7 +107,8 @@ def run_radar_scan(ticker_list, threshold):
             except: continue
     except: pass
     return found_targets
-    # --- SIDEBAR ---
+
+# --- SIDEBAR ---
 st.sidebar.header("🛠️ Dashboard Controls")
 url_bench = load_url_bench()
 if 'custom_bench' not in st.session_state:
@@ -123,8 +120,12 @@ def add_custom_ticker():
     ticker = st.session_state['ticker_input'].upper().strip()
     if ticker and ticker not in st.session_state['custom_bench']:
         st.session_state['custom_bench'].append(ticker)
+        # Automatically add to active selections to match the "bench" behavior
+        if ticker not in st.session_state['active_selections']:
+            st.session_state['active_selections'].append(ticker)
     st.session_state['ticker_input'] = ""
 
+# Auto-add functionality tied to 'on_change' (triggers when hitting Enter)
 st.sidebar.text_input("➕ Add Custom Ticker:", key="ticker_input", on_change=add_custom_ticker)
 selected_tickers = st.sidebar.multiselect("Active Bench:", options=st.session_state['custom_bench'], key="active_selections")
 
@@ -158,7 +159,7 @@ if st.sidebar.button("Run Radar Scan Now"):
 st.markdown("---")
 with st.expander("📖 Terminal Indicator Glossary (Quick Reference)", expanded=False):
     st.subheader("🚦 Title Risk & Veto Signals")
-    st.write("- **⛔ *DO NOT TRADE* (Earnings Veto):** Earnings report occurs before expiration. Stay out.")
+    st.write("- **⚠️ [EARNINGS SOON]:** Earnings report occurs before expiration. Trade with caution.")
     st.write("- **🔴 *FALLING KNIFE* (Bearish Momentum):** Price below 8-EMA. Consider Call Spreads only.")
     st.write("- **🟠 *GAP RISK* (Overnight Vol):** Historical tendency to jump >1.5% overnight.")
     st.write("- **🟡 *TRENDING* (High ADX):** ADX (>25). Stock is moving fast; pick a directional spread. Avoid Condors.")
@@ -174,8 +175,8 @@ with st.expander("📖 Terminal Indicator Glossary (Quick Reference)", expanded=
     with g2:
         st.subheader("🎯 Structure & Math")
         st.write("**POC:** Highest volume price point in 90 days. Price magnet.")
-        st.write("**🔴 Put Defense (Floors):** Structural support where buyers step in.")
-        st.write("**🟢 Call Defense (Ceilings):** Structural resistance where sellers emerge.")
+        st.write("**🔴 Support Walls (Floors):** Structural support where buyers step in.")
+        st.write("**🟢 Resistance Walls (Ceilings):** Structural resistance where sellers emerge.")
         st.write("**Z-Score:** Probability math used to set the strike safety margin.")
 
 # --- PORTFOLIO CORRELATION ---
@@ -242,13 +243,16 @@ for symbol in selected_tickers:
         except: pass
             
         # --- THE NEW ACTIONABLE RISK LOGIC ---
-        if earnings_veto: risk = "⛔ ***DO NOT TRADE*** (Earnings Veto)"
-        elif current_price < ema_8 and rsi_14 < 45: risk = "🔴 ***FALLING KNIFE***: Consider Call Spreads Only"
-        elif current_price > ema_8 and rsi_5 > rsi_5_prev and rsi_14 < 50: risk = "🟢 ***FLOOR CONFIRMED***: Consider Put Spreads Only"
-        elif gap_risk > 1.5: risk = f"🟠 ***GAP RISK***: High Overnight Vol ({gap_risk:.2f}%)"
-        elif adx_14 > 25: risk = f"🟡 ***TRENDING***: ADX {adx_14:.1f} (Pick a Directional Spread)"
-        elif current_price > ma_20: risk = "🟢 ***NEUTRAL CHOP***: Iron Condor Territory"
-        else: risk = "🟡 ***MED RISK***: Price Stalling"
+        # Base risk assessment (Earnings veto removed, now an add-on)
+        if current_price < ema_8 and rsi_14 < 45: base_risk = "🔴 ***FALLING KNIFE***: Consider Call Spreads Only"
+        elif current_price > ema_8 and rsi_5 > rsi_5_prev and rsi_14 < 50: base_risk = "🟢 ***FLOOR CONFIRMED***: Consider Put Spreads Only"
+        elif gap_risk > 1.5: base_risk = f"🟠 ***GAP RISK***: High Overnight Vol ({gap_risk:.2f}%)"
+        elif adx_14 > 25: base_risk = f"🟡 ***TRENDING***: ADX {adx_14:.1f} (Pick a Directional Spread)"
+        elif current_price > ma_20: base_risk = "🟢 ***NEUTRAL CHOP***: Iron Condor Territory"
+        else: base_risk = "🟡 ***MED RISK***: Price Stalling"
+
+        # Append earnings warning if applicable
+        risk = base_risk + " [EARNINGS SOON]" if earnings_veto else base_risk
 
         with st.expander(f"{symbol} | Price: ${current_price:.2f} | Risk: {risk}", expanded=False):
             c1, c2, c3, c4 = st.columns(4)
@@ -290,13 +294,13 @@ for symbol in selected_tickers:
                 st.write(f"9D: {rsi_9:.1f} ({get_s(rsi_9)})")
                 st.write(f"14D: {rsi_14:.1f} ({get_s(rsi_14)})")
             with v3:
-                st.caption("🔴 Put Defense (Red)")
-                st.write(f"**Put Wall 1:** {sup1}")
-                st.write(f"**Put Wall 2:** {sup2}")
+                st.caption("🔴 Support Walls (Red)")
+                st.write(f"**Support Wall 1:** {sup1}")
+                st.write(f"**Support Wall 2:** {sup2}")
             with v4:
-                st.caption("🟢 Call Defense (Green)")
-                st.write(f"**Call Wall 1:** {res1}")
-                st.write(f"**Call Wall 2:** {res2}")
+                st.caption("🟢 Resistance Walls (Green)")
+                st.write(f"**Resistance Wall 1:** {res1}")
+                st.write(f"**Resistance Wall 2:** {res2}")
 
             fig = go.Figure(data=[go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'], name="Price")])
             fig.add_trace(go.Scatter(x=hist.index, y=hist['Close'].ewm(span=8, adjust=False).mean(), line=dict(color='#ff9900', width=1.5, dash='dot'), name="8-EMA"))
