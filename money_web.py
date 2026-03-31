@@ -344,4 +344,57 @@ for symbol in selected_tickers:
             with v2:
                 st.caption("📈 RSI Stack")
                 st.write(f"5D: {rsi_5:.1f} ({get_s(rsi_5)})")
-                st.
+                st.write(f"9D: {rsi_9:.1f} ({get_s(rsi_9)})")
+                st.write(f"14D: {rsi_14:.1f} ({get_s(rsi_14)})")
+            with v3:
+                st.caption("🔴 Support Walls (Red)")
+                st.write(f"**Support Wall 1:** {sup1}")
+                st.write(f"**Support Wall 2:** {sup2}")
+            with v4:
+                st.caption("🟢 Resistance Walls (Green)")
+                st.write(f"**Resistance Wall 1:** {res1}")
+                st.write(f"**Resistance Wall 2:** {res2}")
+
+            fig = go.Figure(data=[go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'], name="Price")])
+            fig.add_trace(go.Scatter(x=hist.index, y=hist['Close'].ewm(span=8, adjust=False).mean(), line=dict(color='#ff9900', width=1.5, dash='dot'), name="8-EMA"))
+            fig.add_hline(y=call_strike, line_width=2, line_color="green", annotation_text="Call Strike")
+            fig.add_hline(y=put_strike, line_width=2, line_color="red", annotation_text="Put Strike")
+            fig.add_hline(y=call_trip, line_width=1, line_dash="dash", line_color="yellow", annotation_text="Call Alert")
+            fig.add_hline(y=put_trip, line_width=1, line_dash="dash", line_color="yellow", annotation_text="Put Alert")
+            fig.update_layout(template="plotly_dark", height=400, margin=dict(l=0, r=0, t=30, b=0), xaxis_rangeslider_visible=False)
+            st.plotly_chart(fig, use_container_width=True)
+
+            # --- DEEP-PARSING NEWS EXTRACTION UI ---
+            ticker_news = []
+            try:
+                news_data = t.news
+                if isinstance(news_data, list): ticker_news = news_data[:3]
+            except: pass
+
+            if ticker_news:
+                st.markdown("---")
+                st.caption("📰 Recent Headlines")
+                for item in ticker_news:
+                    if not isinstance(item, dict): continue
+                    title, link, publisher, pub_time = "Headline Unavailable", "#", "Finance News", ""
+                    if 'content' in item and isinstance(item['content'], dict):
+                        content = item['content']
+                        title = content.get('title', title)
+                        if 'clickThroughUrl' in content and isinstance(content['clickThroughUrl'], dict): link = content['clickThroughUrl'].get('url', link)
+                        elif 'canonicalUrl' in content and isinstance(content['canonicalUrl'], dict): link = content['canonicalUrl'].get('url', link)
+                        if 'provider' in content and isinstance(content['provider'], dict): publisher = content['provider'].get('displayName', publisher)
+                        if 'pubDate' in content:
+                            try: pub_time = pd.to_datetime(content['pubDate']).strftime('%b %d, %H:%M')
+                            except: pass
+                    else:
+                        title = item.get('title', title)
+                        link = item.get('link', item.get('url', link))
+                        publisher = item.get('publisher', publisher)
+                        if 'providerPublishTime' in item:
+                            try: pub_time = datetime.fromtimestamp(item['providerPublishTime']).strftime('%b %d, %H:%M')
+                            except: pass
+                    time_str = f" - {pub_time}" if pub_time else ""
+                    st.markdown(f"- **[{title}]({link})** *({publisher}{time_str})*")
+
+    except Exception as e:
+        st.error(f"Error loading {symbol}: {str(e)}")
