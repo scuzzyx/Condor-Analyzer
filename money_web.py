@@ -4,7 +4,6 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
-import requests
 
 # --- CONFIG & THEME ---
 st.set_page_config(page_title="Aegis Option Scanner", layout="wide", initial_sidebar_state="expanded")
@@ -15,14 +14,6 @@ Z_SCORES = {
     "70%": 1.04, "75%": 1.15, "80%": 1.28, 
     "85%": 1.44, "90%": 1.645, "95%": 1.96
 }
-
-@st.cache_resource
-def get_yf_session():
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-    })
-    return session
 
 def load_url_bench():
     if "bench" in st.query_params:
@@ -87,11 +78,10 @@ def calculate_volume_nodes(hist, current_price, bins=30):
         return f"${poc:.2f}", s1, s2, r1, r2
     except:
         return "N/A", "N/A", "N/A", "N/A", "N/A"
-
-@st.cache_data(ttl=3600)  
+        @st.cache_data(ttl=3600)  
 def get_friday_expirations():
     try:
-        spy = yf.Ticker("SPY", session=get_yf_session())
+        spy = yf.Ticker("SPY")
         dates = spy.options
         fridays = [d for d in dates if datetime.strptime(d, '%Y-%m-%d').weekday() == 4]
         return fridays[:10]
@@ -102,7 +92,7 @@ def get_friday_expirations():
 def run_radar_scan(ticker_list, threshold):
     found_targets = []
     try:
-        bulk_data = yf.download(ticker_list, period="1mo", group_by='ticker', progress=False, session=get_yf_session())
+        bulk_data = yf.download(ticker_list, period="1mo", group_by='ticker', progress=False)
         for sym in ticker_list:
             try:
                 if len(ticker_list) > 1:
@@ -198,7 +188,7 @@ with st.expander("📖 Terminal Indicator Glossary (Quick Reference)", expanded=
 if len(selected_tickers) > 1:
     with st.expander("🧩 Portfolio Risk: 30-Day Correlation Matrix", expanded=False):
         try:
-            bench_data = yf.download(selected_tickers, period="3mo", progress=False, session=get_yf_session())['Close']
+            bench_data = yf.download(selected_tickers, period="3mo", progress=False)['Close']
             returns = bench_data.pct_change().tail(30)
             corr_matrix = returns.corr()
             st.dataframe(corr_matrix.style.background_gradient(cmap='coolwarm', axis=None).format("{:.2f}"))
@@ -210,7 +200,7 @@ st.markdown("---")
 # --- MAIN ENGINE ---
 for symbol in selected_tickers:
     try:
-        t = yf.Ticker(symbol, session=get_yf_session())
+        t = yf.Ticker(symbol)
         hist = t.history(period="3mo")
         if len(hist) < 20: continue
             
