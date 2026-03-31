@@ -118,14 +118,19 @@ if 'active_selections' not in st.session_state:
 
 def add_custom_ticker():
     ticker = st.session_state['ticker_input'].upper().strip()
-    if ticker and ticker not in st.session_state['custom_bench']:
-        st.session_state['custom_bench'].append(ticker)
-        # Automatically add to active selections to match the "bench" behavior
+    if ticker:
+        # Add to the underlying options list if it's completely new
+        if ticker not in st.session_state['custom_bench']:
+            st.session_state['custom_bench'].append(ticker)
+        
+        # Force reassignment to make the multiselect instantly update and run
         if ticker not in st.session_state['active_selections']:
-            st.session_state['active_selections'].append(ticker)
+            current_active = st.session_state['active_selections']
+            st.session_state['active_selections'] = current_active + [ticker]
+            
+    # Clear the input box after hitting enter
     st.session_state['ticker_input'] = ""
 
-# Auto-add functionality tied to 'on_change' (triggers when hitting Enter)
 st.sidebar.text_input("➕ Add Custom Ticker:", key="ticker_input", on_change=add_custom_ticker)
 selected_tickers = st.sidebar.multiselect("Active Bench:", options=st.session_state['custom_bench'], key="active_selections")
 
