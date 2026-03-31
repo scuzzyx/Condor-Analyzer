@@ -160,6 +160,7 @@ st.markdown("---")
 with st.expander("📖 Terminal Indicator Glossary (Quick Reference)", expanded=False):
     st.subheader("🚦 Title Risk & Veto Signals")
     st.write("- **⚠️ [EARNINGS SOON]:** Earnings report occurs before expiration. Trade with caution.")
+    st.write("- **⚠️ [EX-DIVIDEND DANGER]:** Ex-Div date occurs before expiration. High risk of early call assignment.")
     st.write("- **🔴 *FALLING KNIFE* (Bearish Momentum):** Price below 8-EMA. Consider Call Spreads only.")
     st.write("- **🟠 *GAP RISK* (Overnight Vol):** Historical tendency to jump >1.5% overnight.")
     st.write("- **🟡 *TRENDING* (High ADX):** ADX (>25). Stock is moving fast; pick a directional spread. Avoid Condors.")
@@ -202,7 +203,6 @@ for symbol in selected_tickers:
         current_price = hist['Close'].iloc[-1]
         prev_close = hist['Close'].iloc[-2]
         change_dlr, change_pct = current_price - prev_close, ((current_price - prev_close) / prev_close) * 100
-        
         change_color = "#ff4b4b" if change_dlr < 0 else "#09ab3b"
         
         ma_20 = hist['Close'].rolling(window=20).mean().iloc[-1]
@@ -222,28 +222,64 @@ for symbol in selected_tickers:
         put_strike, call_strike = round(current_price - expected_move), round(current_price + expected_move)
         put_trip, call_trip = round(put_strike * 1.05, 2), round(call_strike * 0.95, 2)
         
-        # --- ROBUST IV EXTRACTION ---
+        # --- ROBUST IV, MAX PAIN & P/C RATIO ---
         atm_iv = "N/A"
+        max_pain = "N/A"
+        pc_ratio = "N/A"
         try:
             valid_dates = t.options
             if valid_dates:
                 target_date = selected_date_str if selected_date_str in valid_dates else valid_dates[0]
                 chain = t.option_chain(target_date)
                 calls = chain.calls
+                puts = chain.puts
+                
+                # Extract IV
                 if not calls.empty:
                     closest_idx = (calls['strike'] - current_price).abs().idxmin()
                     iv_val = calls.loc[closest_idx, 'impliedVolatility']
                     atm_iv = f"{iv_val * 100:.1f}%"
+                
+                # Extract P/C Ratio
+                tot_put_oi = puts['openInterest'].sum()
+                tot_call_oi = calls['openInterest'].sum()
+                if tot_call_oi > 0:
+                    pc_ratio = f"{tot_put_oi / tot_call_oi:.2f}"
+                
+                # Calculate Max Pain
+                all_strikes = sorted(list(set(calls['strike'].tolist() + puts['strike'].tolist())))
+                mp_val = float('inf')
+                mp_strike = "N/A"
+                for s in all_strikes:
+                    c_loss = calls[calls['strike'] < s].apply(lambda x: (s - x['strike']) * x['openInterest'], axis=1).sum()
+                    p_loss = puts[puts['strike'] > s].apply(lambda x: (x['strike'] - s) * x['openInterest'], axis=1).sum()
+                    if (c_loss + p_loss) < mp_val:
+                        mp_val = c_loss + p_loss
+                        mp_strike = s
+                if mp_strike != "N/A": max_pain = f"${mp_strike:.2f}"
+        except: pass
+
+        # --- EX-DIVIDEND EXTRACTOR ---
+        ex_div_date = "None scheduled"
+        ex_div_veto = False
+        try:
+            info = t.info
+            ex_ts = info.get('exDividendDate')
+            if ex_ts:
+                ex_dt = datetime.fromtimestamp(ex_ts)
+                ex_div_date = ex_dt.strftime('%Y-%m-%d')
+                if datetime.now() < ex_dt < selected_date:
+                    ex_div_veto = True
         except: pass
 
         # --- DEEP-PARSING NEWS EXTRACTION ---
         ticker_news = []
         try:
             news_data = t.news
-            if isinstance(news_data, list):
-                ticker_news = news_data[:3]
+            if isinstance(news_data, list): ticker_news = news_data[:3]
         except: pass
 
+        # --- EARNINGS EXTRACTION ---
         earnings_date = "Not scheduled"
         earnings_veto = False
         try:
@@ -261,7 +297,10 @@ for symbol in selected_tickers:
         elif current_price > ma_20: base_risk = "🟢 ***NEUTRAL CHOP***: Iron Condor Territory"
         else: base_risk = "🟡 ***MED RISK***: Price Stalling"
 
-        risk = base_risk + " [EARNINGS SOON]" if earnings_veto else base_risk
+        # Apply Title Warnings
+        risk = base_risk
+        if earnings_veto: risk += " [EARNINGS SOON]"
+        if ex_div_veto: risk += " ⚠️[EX-DIVIDEND DANGER]"
 
         with st.expander(f"{symbol} | Price: ${current_price:.2f} | Risk: {risk}", expanded=False):
             c1, c2, c3, c4 = st.columns(4)
@@ -275,15 +314,30 @@ for symbol in selected_tickers:
                 </div>
                 """
 
-            with c1:
-                st.markdown(custom_metric_box("Today's Change", f"${current_price:.2f}", f"{change_dlr:+.2f} ({change_pct:+.2f}%)", sub_color=change_color), unsafe_allow_html=True)
-            with c2:
-                st.markdown(custom_metric_box("Put Strategy", f"${put_strike}", f"Trip Wire: ${put_trip}", sub_color="#ffcc00"), unsafe_allow_html=True)
-            with c3:
-                st.markdown(custom_metric_box("Call Strategy", f"${call_strike}", f"Trip Wire: ${call_trip}", sub_color="#ffcc00"), unsafe_allow_html=True)
-            with c4:
-                st.markdown(custom_metric_box("Market Data", f"{atm_iv} IV", f"Earnings: {earnings_date}"), unsafe_allow_html=True)
+            with c1: st.markdown(custom_metric_box("Today's Change", f"${current_price:.2f}", f"{change_dlr:+.2f} ({change_pct:+.2f}%)", sub_color=change_color), unsafe_allow_html=True)
+            with c2: st.markdown(custom_metric_box("Put Strategy", f"${put_strike}", f"Trip Wire: ${put_trip}", sub_color="#ffcc00"), unsafe_allow_html=True)
+            with c3: st.markdown(custom_metric_box("Call Strategy", f"${call_strike}", f"Trip Wire: ${call_trip}", sub_color="#ffcc00"), unsafe_allow_html=True)
+            with c4: st.markdown(custom_metric_box("Market Data", f"{atm_iv} IV", f"Earnings: {earnings_date}"), unsafe_allow_html=True)
             
+            # --- NEW RISK UNDERWRITING ROW ---
+            st.markdown("---")
+            st.caption("🛡️ Risk Underwriting Data")
+            u1, u2, u3 = st.columns(3)
+            with u1:
+                st.markdown(custom_metric_box("Max Pain", f"{max_pain}", "Gravity point for Friday", sub_color="#a6a6a6"), unsafe_allow_html=True)
+            with u2:
+                pc_color, pc_sub = "#a6a6a6", "Neutral Flow"
+                try:
+                    pcr = float(pc_ratio)
+                    if pcr > 1.2: pc_color, pc_sub = "#ff4b4b", "Heavy Bearish Flow"
+                    elif pcr < 0.8: pc_color, pc_sub = "#09ab3b", "Heavy Bullish Flow"
+                except: pass
+                st.markdown(custom_metric_box("P/C OI Ratio", f"{pc_ratio}", pc_sub, sub_color=pc_color), unsafe_allow_html=True)
+            with u3:
+                div_color = "#ffcc00" if ex_div_veto else "#a6a6a6"
+                div_sub = "EARLY ASSIGNMENT RISK" if ex_div_veto else "Upcoming Ex-Div Date"
+                st.markdown(custom_metric_box("Ex-Dividend", f"{ex_div_date}", div_sub, sub_color=div_color), unsafe_allow_html=True)
+
             st.markdown("---")
             v1, v2, v3, v4 = st.columns(4)
             def get_s(v): return "Oversold" if v <= 30 else "Overbought" if v >= 70 else "Neutral"
@@ -314,52 +368,28 @@ for symbol in selected_tickers:
             fig.update_layout(template="plotly_dark", height=400, margin=dict(l=0, r=0, t=30, b=0), xaxis_rangeslider_visible=False)
             st.plotly_chart(fig, use_container_width=True)
 
-            # --- RENDER HEADLINES ---
             if ticker_news:
                 st.markdown("---")
                 st.caption("📰 Recent Headlines")
                 for item in ticker_news:
                     if not isinstance(item, dict): continue
-                    
-                    # Establish baseline fallbacks
-                    title = "Headline Unavailable"
-                    link = "#"
-                    publisher = "Finance News"
-                    pub_time = ""
-                    
-                    # Scenario A: The newer 'content' nested dictionary structure
+                    title, link, publisher, pub_time = "Headline Unavailable", "#", "Finance News", ""
                     if 'content' in item and isinstance(item['content'], dict):
                         content = item['content']
                         title = content.get('title', title)
-                        
-                        # Digging out the hidden URL
-                        if 'clickThroughUrl' in content and isinstance(content['clickThroughUrl'], dict):
-                            link = content['clickThroughUrl'].get('url', link)
-                        elif 'canonicalUrl' in content and isinstance(content['canonicalUrl'], dict):
-                            link = content['canonicalUrl'].get('url', link)
-                            
-                        # Digging out the Publisher
-                        if 'provider' in content and isinstance(content['provider'], dict):
-                            publisher = content['provider'].get('displayName', publisher)
-                            
-                        # Formatting the new ISO date string
+                        if 'clickThroughUrl' in content and isinstance(content['clickThroughUrl'], dict): link = content['clickThroughUrl'].get('url', link)
+                        elif 'canonicalUrl' in content and isinstance(content['canonicalUrl'], dict): link = content['canonicalUrl'].get('url', link)
+                        if 'provider' in content and isinstance(content['provider'], dict): publisher = content['provider'].get('displayName', publisher)
                         if 'pubDate' in content:
-                            try:
-                                dt = pd.to_datetime(content['pubDate'])
-                                pub_time = dt.strftime('%b %d, %H:%M')
+                            try: pub_time = pd.to_datetime(content['pubDate']).strftime('%b %d, %H:%M')
                             except: pass
-                            
-                    # Scenario B: The older, flat dictionary structure
                     else:
                         title = item.get('title', title)
                         link = item.get('link', item.get('url', link))
                         publisher = item.get('publisher', publisher)
                         if 'providerPublishTime' in item:
-                            try:
-                                pub_time = datetime.fromtimestamp(item['providerPublishTime']).strftime('%b %d, %H:%M')
+                            try: pub_time = datetime.fromtimestamp(item['providerPublishTime']).strftime('%b %d, %H:%M')
                             except: pass
-
-                    # Output the clean Markdown link
                     time_str = f" - {pub_time}" if pub_time else ""
                     st.markdown(f"- **[{title}]({link})** *({publisher}{time_str})*")
 
