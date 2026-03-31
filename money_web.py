@@ -406,9 +406,6 @@ for symbol in selected_tickers:
 
 import streamlit as st
 
-if st.sidebar.button("Clear Data Cache"):
-import streamlit as st
-
 if st.sidebar.button("Force Data Refresh"):
     # 1. Nuke the old cached data
     st.cache_data.clear() 
