@@ -78,7 +78,7 @@ def calculate_volume_nodes(hist, current_price, bins=30):
         return f"${poc:.2f}", s1, s2, r1, r2
     except:
         return "N/A", "N/A", "N/A", "N/A", "N/A"
-        
+
 @st.cache_data(ttl=3600)  
 def get_friday_expirations():
     try:
@@ -164,7 +164,7 @@ if st.sidebar.button("Run Radar Scan Now"):
     if targets: st.sidebar.success(f"🎯 Found: {', '.join(targets)}")
     else: st.sidebar.warning("No targets.")
 
-# --- INDICATOR REFERENCE GLOSSARY (FULLY RESTORED) ---
+# --- INDICATOR REFERENCE GLOSSARY ---
 st.markdown("---")
 with st.expander("📖 Terminal Indicator Glossary (Quick Reference)", expanded=False):
     st.subheader("🚦 Title Risk & Veto Signals")
@@ -383,7 +383,7 @@ with tab_scanner:
 # ==========================================
 with tab_deepdive:
     st.markdown("### 🔬 Automated Quantitative Analyst")
-    st.write("Enter a single ticker below. The system will process the underlying mathematics and translate the chart structure into plain English.")
+    st.write("Enter a single ticker below. The system will process the underlying mathematics, liquidity, and tail risks to translate the chart structure into plain English.")
     
     deep_ticker = st.text_input("Enter Ticker for Deep Dive (e.g., TSLA, SPY):", key="dd_ticker").upper().strip()
     
@@ -395,74 +395,123 @@ with tab_deepdive:
             if len(hist_dd) < 50:
                 st.warning("Not enough trading history to generate a robust analysis.")
             else:
-                # Math extraction
+                # Core Math Extraction
                 dd_price = hist_dd['Close'].iloc[-1]
-                ema_8_dd = hist_dd['Close'].ewm(span=8, adjust=False).mean().iloc[-1]
                 sma_20_dd = hist_dd['Close'].rolling(window=20).mean().iloc[-1]
                 sma_50_dd = hist_dd['Close'].rolling(window=50).mean().iloc[-1]
-                
                 rsi_14_dd = calculate_rsi(hist_dd['Close'], periods=14).iloc[-1]
                 adx_14_dd = calculate_adx(hist_dd)
                 poc_dd, sup1_dd, sup2_dd, res1_dd, res2_dd = calculate_volume_nodes(hist_dd, dd_price)
 
-                # --- PLAIN ENGLISH GENERATION LOGIC ---
-                # 1. Trend Logic (Escaped dollar signs for Streamlit Markdown rendering)
+                info_dd = t_dd.info
+
+                # --- 1. Institutional & Squeeze Math ---
+                short_pct = info_dd.get('shortPercentOfFloat')
+                inst_pct = info_dd.get('heldPercentInstitutions')
+                target_price = info_dd.get('targetMeanPrice')
+                short_pct = short_pct if short_pct is not None else 0
+                inst_pct = inst_pct if inst_pct is not None else 0
+
+                # --- 2. Fat Tail & ATR Math ---
+                tr1 = hist_dd['High'] - hist_dd['Low']
+                tr2 = abs(hist_dd['High'] - hist_dd['Close'].shift(1))
+                tr3 = abs(hist_dd['Low'] - hist_dd['Close'].shift(1))
+                tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+                atr_14 = tr.rolling(14).mean().iloc[-1]
+                
+                # --- 3. Volatility Percentile Math (1 Year) ---
+                hist_1y = t_dd.history(period="1y")
+                if len(hist_1y) > 20:
+                    returns_1y = hist_1y['Close'].pct_change().dropna()
+                    hv_20 = returns_1y.rolling(window=20).std() * np.sqrt(252)
+                    current_hv = hv_20.iloc[-1]
+                    hv_rank = (hv_20.rank(pct=True).dropna().iloc[-1]) * 100
+                else:
+                    hv_rank, current_hv = 50, 0.20
+
+                # --- 4. Option Chain Skew & Liquidity Math ---
+                skew_status, skew_text = "⚖️ **Balanced Skew:**", "Put and Call implied volatilities are relatively balanced. No extreme directional panic is being priced in."
+                liq_status, liq_text = "⚖️ **Adequate Liquidity:**", "Volume is average. Use limit orders and be cautious of bid-ask spreads on wider multi-leg trades."
+                atm_iv_dd = current_hv 
+                
+                try:
+                    dd_dates = t_dd.options
+                    if dd_dates:
+                        dd_chain = t_dd.option_chain(dd_dates[0])
+                        
+                        # Liquidity check
+                        total_vol = dd_chain.calls['volume'].fillna(0).sum() + dd_chain.puts['volume'].fillna(0).sum()
+                        avg_vol = total_vol / (len(dd_chain.calls) + len(dd_chain.puts))
+                        if avg_vol > 300:
+                            liq_status = "🌊 **A+ Liquidity:**"
+                            liq_text = "Highly liquid options chain. Slippage on multi-leg spreads and directional executions should be minimal."
+                        elif avg_vol < 50:
+                            liq_status = "🧊 **Poor Liquidity:**"
+                            liq_text = "Average option volume is extremely low. Trading multi-leg spreads here will result in massive slippage. Expect difficulty getting filled at target credits."
+                        
+                        # Skew check
+                        calls, puts = dd_chain.calls, dd_chain.puts
+                        otm_call = calls[calls['strike'] >= dd_price * 1.1]
+                        otm_put = puts[puts['strike'] <= dd_price * 0.9]
+                        
+                        if not calls.empty:
+                            atm_iv_dd = calls.iloc[(calls['strike'] - dd_price).abs().argsort()[:1]]['impliedVolatility'].values[0]
+                            
+                        if not otm_call.empty and not otm_put.empty:
+                            c_iv = otm_call.iloc[0]['impliedVolatility']
+                            p_iv = otm_put.iloc[-1]['impliedVolatility']
+                            skew_diff = p_iv - c_iv
+                            
+                            if skew_diff > 0.12:
+                                skew_status = "🚨 **Severe Downside Skew:**"
+                                skew_text = "The market is pricing Out-of-the-Money Puts significantly higher than Calls. Institutional money is paying top dollar for crash protection. Consider skewing spreads to take less risk on the Put side."
+                            elif skew_diff < -0.12:
+                                skew_status = "🚀 **Upside Call Skew:**"
+                                skew_text = "Out-of-the-Money Calls are pricing higher than Puts. Market makers are anticipating explosive upside risk. Caution is advised when selling Call spreads."
+                except: pass
+
+                # --- PLAIN ENGLISH GENERATION LOGIC (ESCAPED LaTeX) ---
+                # Trend
                 if dd_price > sma_20_dd and dd_price > sma_50_dd:
-                    trend_status = "🟢 **Bullish Uptrend:**"
-                    trend_text = f"The stock is trading at \${dd_price:.2f}, which is comfortably above both its 20-day (\${sma_20_dd:.2f}) and 50-day (\${sma_50_dd:.2f}) moving averages. Buyers are currently in control of the broader trend."
+                    trend_status, trend_text = "🟢 **Bullish Uptrend:**", f"The stock is trading at \${dd_price:.2f}, comfortably above its 20-day (\${sma_20_dd:.2f}) and 50-day (\${sma_50_dd:.2f}) moving averages. Buyers control the broader trend."
                 elif dd_price < sma_20_dd and dd_price < sma_50_dd:
-                    trend_status = "🔴 **Bearish Downtrend:**"
-                    trend_text = f"The stock is trading at \${dd_price:.2f}, sitting below both its 20-day (\${sma_20_dd:.2f}) and 50-day (\${sma_50_dd:.2f}) moving averages. Sellers are firmly in control."
+                    trend_status, trend_text = "🔴 **Bearish Downtrend:**", f"The stock is trading at \${dd_price:.2f}, sitting below its 20-day (\${sma_20_dd:.2f}) and 50-day (\${sma_50_dd:.2f}) moving averages. Sellers are firmly in control."
                 else:
-                    trend_status = "🟡 **Mixed / Consolidation:**"
-                    trend_text = f"The stock is caught in a battleground. It is trading at \${dd_price:.2f}, sandwiched between key moving averages. Expect choppy, sideways price action."
+                    trend_status, trend_text = "🟡 **Mixed / Consolidation:**", f"The stock is caught in a battleground at \${dd_price:.2f}, sandwiched between key moving averages. Expect choppy, sideways price action."
 
-                # 2. Momentum Logic
+                # Momentum
                 if rsi_14_dd > 70:
-                    mom_status = "🔥 **Overbought / Overextended:**"
-                    mom_text = f"With an RSI of {rsi_14_dd:.1f}, the stock is running extremely hot. A near-term pullback or cool-off period is highly likely."
+                    mom_status, mom_text = "🔥 **Overbought / Overextended:**", f"RSI is running hot ({rsi_14_dd:.1f}). A near-term pullback is highly likely."
                 elif rsi_14_dd < 30:
-                    mom_status = "🧊 **Oversold / Washout:**"
-                    mom_text = f"With an RSI of {rsi_14_dd:.1f}, the stock has been heavily punished. Selling pressure may be exhausted, creating conditions for a potential bounce."
+                    mom_status, mom_text = "🧊 **Oversold / Washout:**", f"RSI indicates heavy punishment ({rsi_14_dd:.1f}). Selling pressure may be exhausted, creating conditions for a potential bounce."
                 else:
-                    mom_status = "⚖️ **Neutral Momentum:**"
-                    mom_text = f"With an RSI of {rsi_14_dd:.1f}, momentum is balanced. There are no extreme overbought or oversold warning flags."
-                    
-                if adx_14_dd > 25:
-                    mom_text += f" Additionally, the ADX is high ({adx_14_dd:.1f}), confirming that whatever direction the stock is moving, it is doing so with strong conviction."
+                    mom_status, mom_text = "⚖️ **Neutral Momentum:**", f"RSI is balanced ({rsi_14_dd:.1f}). No extreme overbought or oversold flags."
+                if adx_14_dd > 25: mom_text += f" The ADX is high ({adx_14_dd:.1f}), confirming strong directional conviction."
 
-                # 3. Structure Logic
-                struct_text = f"The highest volume node (the Point of Control) over the last few months is located at **{poc_dd}**. This acts as a heavy gravity magnet for the price. "
-                if sup1_dd != "Freefall (None)":
-                    struct_text += f"If the stock falls, expect buyers to step in and defend the structural floor around **{sup1_dd}**. "
-                if res1_dd != "Sky (None)":
-                    struct_text += f"If the stock rallies, expect sellers to emerge and create a ceiling around **{res1_dd}**."
-
-                # Clean LaTeX triggers from dynamic variables (e.g. from the calculate_volume_nodes strings)
+                # Structure
+                struct_text = f"The Point of Control (highest volume node) is located at **{poc_dd}**. This acts as a heavy gravity magnet. "
+                if sup1_dd != "Freefall (None)": struct_text += f"If the stock falls, expect buyers to defend the structural floor around **{sup1_dd}**. "
+                if res1_dd != "Sky (None)": struct_text += f"If the stock rallies, expect sellers to create a ceiling around **{res1_dd}**."
                 struct_text = struct_text.replace("$", r"\$")
 
-                # --- RENDER OUTPUT ---
-                st.markdown("---")
-                st.subheader(f"Data Translation for {deep_ticker}")
-                
-                col1, col2 = st.columns([1, 1])
-                with col1:
-                    st.markdown("#### 📈 1. Broader Trend")
-                    st.markdown(f"{trend_status} {trend_text}")
-                    
-                    st.markdown("#### 🏎️ 2. Momentum & Velocity")
-                    st.markdown(f"{mom_status} {mom_text}")
-                    
-                    st.markdown("#### 🧱 3. Structural Walls")
-                    st.markdown(f"🏛️ **Price Magnets:** {struct_text}")
-                    
-                with col2:
-                    st.markdown("#### Visual Reference")
-                    fig_dd = go.Figure(data=[go.Candlestick(x=hist_dd.index, open=hist_dd['Open'], high=hist_dd['High'], low=hist_dd['Low'], close=hist_dd['Close'], name="Price")])
-                    fig_dd.add_trace(go.Scatter(x=hist_dd.index, y=hist_dd['Close'].rolling(window=20).mean(), line=dict(color='blue', width=1.5), name="20-MA"))
-                    fig_dd.add_trace(go.Scatter(x=hist_dd.index, y=hist_dd['Close'].rolling(window=50).mean(), line=dict(color='purple', width=1.5), name="50-MA"))
-                    fig_dd.update_layout(template="plotly_dark", height=350, margin=dict(l=0, r=0, t=10, b=0), xaxis_rangeslider_visible=False)
-                    st.plotly_chart(fig_dd, use_container_width=True)
+                # Volatility Premium Context
+                if hv_rank > 75:
+                    vol_status, vol_text = "🔥 **High Volatility Premium:**", f"Volatility is in the **{hv_rank:.0f}th percentile**. Options premiums are highly inflated. This is an optimal environment for net-credit spreads and premium-selling strategies."
+                elif hv_rank < 25:
+                    vol_status, vol_text = "🧊 **Low Vol / Cheap Premium:**", f"Volatility is dead (**{hv_rank:.0f}th percentile**). Premiums are dangerously cheap; a sudden market move will easily breach your strikes. Consider net-debit directional trades instead of selling premium."
+                else:
+                    vol_status, vol_text = "⚖️ **Average Volatility:**", f"Volatility is in the **{hv_rank:.0f}th percentile**. Premiums are trading at fair historical value. Standard spread structures are viable."
 
-        except Exception as e:
-            st.error(f"Could not load data for {deep_ticker}. Ensure the ticker is valid. Error: {str(e)}")
+                # Squeeze & Institutional
+                if short_pct > 0.10:
+                    sqz_status, sqz_text = "🚨 **High Squeeze Risk:**", f"**{short_pct*100:.1f}%** of the float is sold short. If the stock rallies, short sellers may be forced to cover, causing a violent squeeze higher. Avoid naked short calls or tight call credit spreads."
+                else:
+                    sqz_status, sqz_text = "✅ **Low Squeeze Risk:**", f"Short interest is minimal ({short_pct*100:.1f}%). Little risk of a structural short-squeeze blowing through upper resistance walls."
+                
+                inst_text = f"Institutions control **{inst_pct*100:.1f}%** of this stock. " if inst_pct > 0.50 else f"Institutional ownership is low (**{inst_pct*100:.1f}%**). Retail momentum may drive erratic price action. "
+                if target_price and target_price > 0:
+                    dist = ((target_price - dd_price) / dd_price) * 100
+                    inst_text += f"The Wall Street consensus target is **\${target_price:.2f}** ({dist:+.1f}% from current levels)."
+
+                # Fat Tail Risk
+                implied_14d_move = dd_price *
