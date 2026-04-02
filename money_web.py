@@ -388,16 +388,16 @@ with tab_deepdive:
                 poc_dd, sup1_dd, sup2_dd, res1_dd, res2_dd = calculate_volume_nodes(hist_dd, dd_price)
 
                 # --- PLAIN ENGLISH GENERATION LOGIC ---
-                # 1. Trend Logic
+                # 1. Trend Logic (Escaping $ with \$ to prevent LaTeX formatting)
                 if dd_price > sma_20_dd and dd_price > sma_50_dd:
                     trend_status = "🟢 **Bullish Uptrend:**"
-                    trend_text = f"The stock is trading at ${dd_price:.2f}, which is comfortably above both its 20-day (${sma_20_dd:.2f}) and 50-day (${sma_50_dd:.2f}) moving averages. Buyers are currently in control of the broader trend."
+                    trend_text = f"The stock is trading at \${dd_price:.2f}, which is comfortably above both its 20-day (\${sma_20_dd:.2f}) and 50-day (\${sma_50_dd:.2f}) moving averages. Buyers are currently in control of the broader trend."
                 elif dd_price < sma_20_dd and dd_price < sma_50_dd:
                     trend_status = "🔴 **Bearish Downtrend:**"
-                    trend_text = f"The stock is trading at ${dd_price:.2f}, sitting below both its 20-day (${sma_20_dd:.2f}) and 50-day (${sma_50_dd:.2f}) moving averages. Sellers are firmly in control."
+                    trend_text = f"The stock is trading at \${dd_price:.2f}, sitting below both its 20-day (\${sma_20_dd:.2f}) and 50-day (\${sma_50_dd:.2f}) moving averages. Sellers are firmly in control."
                 else:
                     trend_status = "🟡 **Mixed / Consolidation:**"
-                    trend_text = f"The stock is caught in a battleground. It is trading at ${dd_price:.2f}, sandwiched between key moving averages. Expect choppy, sideways price action."
+                    trend_text = f"The stock is caught in a battleground. It is trading at \${dd_price:.2f}, sandwiched between key moving averages. Expect choppy, sideways price action."
 
                 # 2. Momentum Logic
                 if rsi_14_dd > 70:
@@ -420,6 +420,9 @@ with tab_deepdive:
                 if res1_dd != "Sky (None)":
                     struct_text += f"If the stock rallies, expect sellers to emerge and create a ceiling around **{res1_dd}**."
 
+                # FIX: Strip out the LaTeX math triggers from the dynamically generated structure text
+                struct_text = struct_text.replace("$", r"\$")
+
                 # --- RENDER OUTPUT ---
                 st.markdown("---")
                 st.subheader(f"Data Translation for {deep_ticker}")
@@ -436,7 +439,6 @@ with tab_deepdive:
                     st.markdown(f"🏛️ **Price Magnets:** {struct_text}")
                     
                 with col2:
-                    # Provide a simple visual reference for the user anyway
                     st.markdown("#### Visual Reference")
                     fig_dd = go.Figure(data=[go.Candlestick(x=hist_dd.index, open=hist_dd['Open'], high=hist_dd['High'], low=hist_dd['Low'], close=hist_dd['Close'], name="Price")])
                     fig_dd.add_trace(go.Scatter(x=hist_dd.index, y=hist_dd['Close'].rolling(window=20).mean(), line=dict(color='blue', width=1.5), name="20-MA"))
