@@ -164,17 +164,35 @@ if st.sidebar.button("Run Radar Scan Now"):
     if targets: st.sidebar.success(f"🎯 Found: {', '.join(targets)}")
     else: st.sidebar.warning("No targets.")
 
-# --- INDICATOR REFERENCE GLOSSARY ---
-st.sidebar.markdown("---")
-with st.sidebar.expander("📖 Glossary (Quick Reference)", expanded=False):
+# --- INDICATOR REFERENCE GLOSSARY (FULLY RESTORED) ---
+st.markdown("---")
+with st.expander("📖 Terminal Indicator Glossary (Quick Reference)", expanded=False):
     st.subheader("🚦 Title Risk & Veto Signals")
     st.write("- **⚠️ [EARNINGS SOON]:** Earnings report occurs before expiration. Trade with caution.")
     st.write("- **⚠️ [EX-DIVIDEND DANGER]:** Ex-Div date occurs before expiration. High risk of early call assignment.")
-    st.write("- **🔴 *FALLING KNIFE*:** Price below 8-EMA. Consider Call Spreads only.")
-    st.write("- **🟠 *GAP RISK*:** Historical tendency to jump >1.5% overnight.")
-    st.write("- **🟡 *TRENDING*:** ADX (>25). Stock is moving fast; pick a directional spread. Avoid Condors.")
-    st.write("- **🟢 *FLOOR CONFIRMED*:** 8-EMA Reclaimed. Consider Put Spreads only.")
-    st.write("- **🟢 *NEUTRAL CHOP*:** Ideal sideways environment for Iron Condors.")
+    st.write("- **🔴 *FALLING KNIFE* (Bearish Momentum):** Price below 8-EMA. Consider Call Spreads only.")
+    st.write("- **🟠 *GAP RISK* (Overnight Vol):** Historical tendency to jump >1.5% overnight.")
+    st.write("- **🟡 *TRENDING* (High ADX):** ADX (>25). Stock is moving fast; pick a directional spread. Avoid Condors.")
+    st.write("- **🟢 *FLOOR CONFIRMED* (Bullish Reversal):** 8-EMA Reclaimed. Consider Put Spreads only.")
+    st.write("- **🟢 *NEUTRAL CHOP* (Condor Territory):** Ideal sideways environment for Iron Condors.")
+    
+    g1, g2, g3 = st.columns(3)
+    with g1:
+        st.subheader("🛡️ Trend & Momentum")
+        st.write("**8-Day EMA:** The 'Algorithmic Trend' line. Orange dotted line on chart.")
+        st.write("**RSI Stack:** Overbought (>70), Oversold (<30), Neutral (31-69).")
+        st.write("**ADX:** Above 25 = Strong Trend. Below 25 = Drifting/Chop.")
+    with g2:
+        st.subheader("🎯 Structure & Math")
+        st.write("**POC:** Highest volume price point in 90 days. Price magnet.")
+        st.write("**🔴 Support Walls:** Structural floor where buyers step in.")
+        st.write("**🟢 Resistance Walls:** Structural ceiling where sellers emerge.")
+        st.write("**Z-Score:** Probability math used to set the strike safety margin.")
+    with g3:
+        st.subheader("⚖️ Risk Underwriting")
+        st.write("**Max Pain:** The strike where options sellers lose the least. Acts as a Friday price magnet.")
+        st.write("**P/C OI Ratio:** Put vs Call Open Interest. > 1.2 is Bearish flow, < 0.8 is Bullish flow.")
+        st.write("**Ex-Dividend:** The cutoff date to own the stock for a dividend. High risk for short calls.")
 
 # --- PORTFOLIO CORRELATION ---
 if len(selected_tickers) > 1:
@@ -388,7 +406,7 @@ with tab_deepdive:
                 poc_dd, sup1_dd, sup2_dd, res1_dd, res2_dd = calculate_volume_nodes(hist_dd, dd_price)
 
                 # --- PLAIN ENGLISH GENERATION LOGIC ---
-                # 1. Trend Logic (Escaping $ with \$ to prevent LaTeX formatting)
+                # 1. Trend Logic (Escaped dollar signs for Streamlit Markdown rendering)
                 if dd_price > sma_20_dd and dd_price > sma_50_dd:
                     trend_status = "🟢 **Bullish Uptrend:**"
                     trend_text = f"The stock is trading at \${dd_price:.2f}, which is comfortably above both its 20-day (\${sma_20_dd:.2f}) and 50-day (\${sma_50_dd:.2f}) moving averages. Buyers are currently in control of the broader trend."
@@ -420,7 +438,7 @@ with tab_deepdive:
                 if res1_dd != "Sky (None)":
                     struct_text += f"If the stock rallies, expect sellers to emerge and create a ceiling around **{res1_dd}**."
 
-                # FIX: Strip out the LaTeX math triggers from the dynamically generated structure text
+                # Clean LaTeX triggers from dynamic variables (e.g. from the calculate_volume_nodes strings)
                 struct_text = struct_text.replace("$", r"\$")
 
                 # --- RENDER OUTPUT ---
