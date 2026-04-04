@@ -136,12 +136,18 @@ def fetch_macro_data():
     fg_val, fg_rating = "N/A", "N/A"
     try:
         url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
-        with urllib.request.urlopen(req, timeout=3) as response:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+            'Accept': 'application/json',
+            'Referer': 'https://edition.cnn.com/'
+        }
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=5) as response:
             data = json.loads(response.read().decode())
             fg_val = round(data['fear_and_greed']['score'])
             fg_rating = data['fear_and_greed']['rating'].title()
     except: pass
+    
     return vix_val, vix_pct, fg_val, fg_rating
 
 def custom_metric_box(label, value, sub_value, val_color="#FAFAFA", sub_color="#a6a6a6"):
