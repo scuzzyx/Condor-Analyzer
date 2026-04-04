@@ -4,6 +4,8 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
+import urllib.request
+import json
 
 # --- CONFIG & THEME ---
 st.set_page_config(page_title="Aegis Option Scanner", layout="wide", initial_sidebar_state="expanded")
@@ -121,6 +123,27 @@ def run_radar_scan(ticker_list, threshold):
     except: pass
     return found_targets
 
+@st.cache_data(ttl=900)
+def fetch_macro_data():
+    vix_val, vix_pct = "N/A", "N/A"
+    try:
+        vix_hist = yf.Ticker("^VIX").history(period="5d")
+        if len(vix_hist) >= 2:
+            vix_val = float(vix_hist['Close'].iloc[-1])
+            vix_pct = float(((vix_val - vix_hist['Close'].iloc[-2]) / vix_hist['Close'].iloc[-2]) * 100)
+    except: pass
+    
+    fg_val, fg_rating = "N/A", "N/A"
+    try:
+        url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+        with urllib.request.urlopen(req, timeout=3) as response:
+            data = json.loads(response.read().decode())
+            fg_val = round(data['fear_and_greed']['score'])
+            fg_rating = data['fear_and_greed']['rating'].title()
+    except: pass
+    return vix_val, vix_pct, fg_val, fg_rating
+
 def custom_metric_box(label, value, sub_value, val_color="#FAFAFA", sub_color="#a6a6a6"):
     return f"""
     <div style="line-height: 1.4; margin-bottom: 14px;">
@@ -132,6 +155,21 @@ def custom_metric_box(label, value, sub_value, val_color="#FAFAFA", sub_color="#
 
 # --- SIDEBAR ---
 st.sidebar.header("🛠️ Dashboard Controls")
+
+vix_v, vix_p, fg_v, fg_r = fetch_macro_data()
+st.sidebar.markdown("### 🌍 Macro Sentiment")
+mac1, mac2 = st.sidebar.columns(2)
+with mac1:
+    vix_color = "#ff4b4b" if (isinstance(vix_p, float) and vix_p > 0) else "#09ab3b"
+    v_val_str = f"{vix_v:.2f}" if isinstance(vix_v, float) else "N/A"
+    v_pct_str = f"{vix_p:+.2f}%" if isinstance(vix_p, float) else ""
+    st.markdown(custom_metric_box("VIX Index", v_val_str, v_pct_str, sub_color=vix_color), unsafe_allow_html=True)
+with mac2:
+    fg_color = "#09ab3b" if (isinstance(fg_v, int) and fg_v >= 55) else ("#ff4b4b" if (isinstance(fg_v, int) and fg_v <= 45) else "#ffcc00")
+    st.markdown(custom_metric_box("Fear & Greed", str(fg_v), str(fg_r), val_color=fg_color), unsafe_allow_html=True)
+
+st.sidebar.markdown("---")
+
 url_bench = load_url_bench()
 if 'custom_bench' not in st.session_state:
     st.session_state['custom_bench'] = list(set(url_bench + ["SPY", "QQQ"]))
@@ -370,12 +408,11 @@ with tab_deepdive:
     if deep_ticker:
         try:
             t_dd = yf.Ticker(deep_ticker)
-            hist_dd = t_dd.history(period="1y") # Changed to 1y for IVR calculation
+            hist_dd = t_dd.history(period="1y") 
             
             if len(hist_dd) < 50:
                 st.warning("Not enough trading history to generate a robust analysis.")
             else:
-                # Use 6mo for the chart display and technicals to match original behavior
                 hist_6mo = hist_dd.tail(126)
                 dd_price = hist_6mo['Close'].iloc[-1]
                 sma_20_dd = hist_6mo['Close'].rolling(window=20).mean().iloc[-1]
