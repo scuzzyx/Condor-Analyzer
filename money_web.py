@@ -446,6 +446,7 @@ with tab_deepdive:
                 skew_status, skew_text = "⚖️ **Balanced Skew:**", "Put and Call implied volatilities are relatively balanced. No extreme directional panic is being priced in."
                 liq_status, liq_text = "⚖️ **Adequate Liquidity:**", "Volume is average. Use limit orders and be cautious of bid-ask spreads on wider multi-leg trades."
                 atm_iv_dd = current_hv 
+                oi_fig = None
                 
                 try:
                     dd_dates = t_dd.options
@@ -471,6 +472,19 @@ with tab_deepdive:
                                 skew_status, skew_text = "🚨 **Severe Downside Skew:**", "Market pricing OTM Puts higher than Calls. Institutional money paying top dollar for crash protection."
                             elif skew_diff < -0.12:
                                 skew_status, skew_text = "🚀 **Upside Call Skew:**", "OTM Calls pricing higher than Puts. Market anticipating explosive upside risk."
+                                
+                        # Build OI Chart
+                        calls_oi = calls[['strike', 'openInterest']].copy()
+                        puts_oi = puts[['strike', 'openInterest']].copy()
+                        lb, ub = dd_price * 0.85, dd_price * 1.15
+                        calls_oi = calls_oi[(calls_oi['strike'] >= lb) & (calls_oi['strike'] <= ub)]
+                        puts_oi = puts_oi[(puts_oi['strike'] >= lb) & (puts_oi['strike'] <= ub)]
+                        
+                        oi_fig = go.Figure()
+                        oi_fig.add_trace(go.Bar(x=calls_oi['strike'], y=calls_oi['openInterest'], name='Call OI', marker_color='#09ab3b', opacity=0.7))
+                        oi_fig.add_trace(go.Bar(x=puts_oi['strike'], y=puts_oi['openInterest'], name='Put OI', marker_color='#ff4b4b', opacity=0.7))
+                        oi_fig.update_layout(title="Open Interest Profile (Nearest Expiry)", template="plotly_dark", height=300, margin=dict(l=0, r=0, t=30, b=0), barmode='group', xaxis_title="Strike Price", yaxis_title="Open Interest")
+                        oi_fig.add_vline(x=dd_price, line_width=2, line_dash="dash", line_color="white", annotation_text="Price")
                 except: pass
 
                 ivr_val = calculate_ivr(hist_dd, atm_iv_dd)
@@ -526,7 +540,12 @@ with tab_deepdive:
                     fig_dd = go.Figure(data=[go.Candlestick(x=hist_6mo.index, open=hist_6mo['Open'], high=hist_6mo['High'], low=hist_6mo['Low'], close=hist_6mo['Close'], name="Price")])
                     fig_dd.add_trace(go.Scatter(x=hist_6mo.index, y=hist_6mo['Close'].rolling(window=20).mean(), line=dict(color='blue', width=1.5), name="20-MA"))
                     fig_dd.add_trace(go.Scatter(x=hist_6mo.index, y=hist_6mo['Close'].rolling(window=50).mean(), line=dict(color='purple', width=1.5), name="50-MA"))
-                    fig_dd.update_layout(template="plotly_dark", height=450, margin=dict(l=0, r=0, t=10, b=0), xaxis_rangeslider_visible=False)
+                    fig_dd.update_layout(template="plotly_dark", height=350, margin=dict(l=0, r=0, t=10, b=0), xaxis_rangeslider_visible=False)
                     st.plotly_chart(fig_dd, use_container_width=True)
+                    
+                    if oi_fig:
+                        st.markdown("#### Options Positioning")
+                        st.plotly_chart(oi_fig, use_container_width=True)
+                        
         except Exception as e:
             st.error(f"Error: {str(e)}")
