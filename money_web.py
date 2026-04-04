@@ -50,18 +50,18 @@ def calculate_adx(hist, period=14):
 def calculate_ivr(hist_1y, current_iv):
     """Calculates IV Rank using 1-year Historical Volatility as the range proxy."""
     try:
-        if current_iv == "N/A" or current_iv is None: return "N/A"
-        # Convert "45.2%" string to 0.452 float if necessary
+        if current_iv == "N/A" or current_iv is None: 
+            return "N/A"
+        
         curr_iv_val = float(current_iv.replace('%', '')) / 100 if isinstance(current_iv, str) else current_iv
         
         returns = hist_1y['Close'].pct_change().dropna()
-        # 20-day rolling HV annualized
         hv_series = returns.rolling(20).std() * np.sqrt(252)
         hv_min = hv_series.min()
         hv_max = hv_series.max()
         
         ivr = ((curr_iv_val - hv_min) / (hv_max - hv_min)) * 100
-        return max(0, min(100, ivr)) # Clamp between 0-100
+        return max(0, min(100, ivr))
     except:
         return "N/A"
 
@@ -95,7 +95,7 @@ def calculate_volume_nodes(hist, current_price, bins=30):
         s2 = f"${lower[-2]:.2f}" if len(lower) > 1 else "⚠️ No Wall"
         return f"${poc:.2f}", s1, s2, r1, r2
     except:
-        return "N/A", "N/A", "N/A", "N/A", "N/A"
+        return "N/A", "N/
 
 @st.cache_data(ttl=3600)  
 def get_friday_expirations():
@@ -122,8 +122,10 @@ def run_radar_scan(ticker_list, threshold):
                     h, l = hist.max(), hist.min()
                     cur = hist.iloc[-1]
                     if (h - l) / cur < threshold: found_targets.append(sym)
-            except: continue
-    except: pass
+            except: 
+                continue
+    except: 
+        pass
     return found_targets
 
 def custom_metric_box(label, value, sub_value, val_color="#FAFAFA", sub_color="#a6a6a6"):
@@ -172,8 +174,10 @@ LIQUID_50 = ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA', 'AMD', 'PL
 scan_tol = st.sidebar.slider("Tolerance (%)", 3, 15, 8) / 100.0
 if st.sidebar.button("Run Radar Scan Now"):
     targets = run_radar_scan(LIQUID_50, scan_tol)
-    if targets: st.sidebar.success(f"🎯 Found: {', '.join(targets)}")
-    else: st.sidebar.warning("No targets.")
+    if targets: 
+        st.sidebar.success(f"🎯 Found: {', '.join(targets)}")
+    else: 
+        st.sidebar.warning("No targets.")
 
 # --- GLOSSARY ---
 st.markdown("---")
@@ -205,121 +209,169 @@ with tab_scanner:
     for symbol in selected_tickers:
         try:
             t = yf.Ticker(symbol)
-            hist = t.history(period="1y") # Need 1y for IVR
-            if len(hist) < 20: continue
+            hist = t.history(period="1y") 
+            if len(hist) < 20: 
+                continue
+                
             current_price = hist['Close'].iloc[-1]
             prev_close = hist['Close'].iloc[-2]
-            change_dlr, change_pct = current_price - prev_close, ((current_price - prev_close) / prev_close) * 100
+            change_dlr = current_price - prev_close
+            change_pct = ((current_price - prev_close) / prev_close) * 100
             change_color = "#ff4b4b" if change_dlr < 0 else "#09ab3b"
             
             ma_20 = hist['Close'].rolling(window=20).mean().iloc[-1]
             ema_8 = hist['Close'].ewm(span=8, adjust=False).mean().iloc[-1]
             rsi_14 = calculate_rsi(hist['Close'], periods=14).iloc[-1]
-            adx_14, gap_risk = calculate_adx(hist), calculate_gap_risk(hist)
+            adx_14 = calculate_adx(hist)
+            gap_risk = calculate_gap_risk(hist)
             poc, sup1, sup2, res1, res2 = calculate_volume_nodes(hist, current_price)
             
             volatility_dte = np.std(hist['Close'].pct_change().dropna()) * np.sqrt(dte if dte > 0 else 1)
             expected_move = current_price * (volatility_dte * z_score)
-            put_strike, call_strike = round(current_price - expected_move), round(current_price + expected_move)
-            put_trip, call_trip = round(put_strike * 1.05, 2), round(call_strike * 0.95, 2)
+            put_strike = round(current_price - expected_move)
+            call_strike = round(current_price + expected_move)
+            put_trip = round(put_strike * 1.05, 2)
+            call_trip = round(call_strike * 0.95, 2)
             
-            atm_iv_raw, ivr, max_pain, pc_ratio = 0, "N/A", "N/A", "N/A"
+            atm_iv_raw = 0
+            ivr = "N/A"
+            max_pain = "N/A"
+            pc_ratio = "N/A"
             atm_iv_display = "N/A"
+            
             try:
                 valid_dates = t.options
                 if valid_dates:
                     target_date = selected_date_str if selected_date_str in valid_dates else valid_dates[0]
                     chain = t.option_chain(target_date)
-                    calls, puts = chain.calls, chain.puts
+                    calls = chain.calls
+                    puts = chain.puts
+                    
                     if not calls.empty:
                         closest_idx = (calls['strike'] - current_price).abs().idxmin()
                         atm_iv_raw = calls.loc[closest_idx, 'impliedVolatility']
                         atm_iv_display = f"{atm_iv_raw * 100:.1f}%"
                         ivr_val = calculate_ivr(hist, atm_iv_raw)
                         ivr = f"{ivr_val:.1f}" if isinstance(ivr_val, (int, float)) else "N/A"
+                        
                     if not calls.empty and not puts.empty:
-                        tot_put_oi, tot_call_oi = puts['openInterest'].sum(), calls['openInterest'].sum()
-                        if tot_call_oi > 0: pc_ratio = f"{tot_put_oi / tot_call_oi:.2f}"
+                        tot_put_oi = puts['openInterest'].sum()
+                        tot_call_oi = calls['openInterest'].sum()
+                        if tot_call_oi > 0: 
+                            pc_ratio = f"{tot_put_oi / tot_call_oi:.2f}"
+                            
                         all_strikes = sorted(list(set(calls['strike'].tolist() + puts['strike'].tolist())))
-                        mp_val, mp_strike = float('inf'), "N/A"
+                        mp_val = float('inf')
+                        mp_strike = "N/A"
                         for s in all_strikes:
                             c_loss = calls[calls['strike'] < s].apply(lambda x: (s - x['strike']) * x['openInterest'], axis=1).sum()
                             p_loss = puts[puts['strike'] > s].apply(lambda x: (x['strike'] - s) * x['openInterest'], axis=1).sum()
-                            if (c_loss + p_loss) < mp_val: mp_val, mp_strike = c_loss + p_loss, s
-                        if mp_strike != "N/A": max_pain = f"${mp_strike:.2f}"
-            except: pass
+                            if (c_loss + p_loss) < mp_val: 
+                                mp_val = c_loss + p_loss
+                                mp_strike = s
+                        if mp_strike != "N/A": 
+                            max_pain = f"${mp_strike:.2f}"
+            except: 
+                pass
 
             earnings_veto = False
             try:
                 cal = t.calendar
-                e_date = pd.to_datetime(cal.get('Earnings Date')[0]) if isinstance(cal, dict) else pd.to_datetime(cal.loc['Earnings Date'].iloc[0])
+                if isinstance(cal, dict):
+                    e_date = pd.to_datetime(cal.get('Earnings Date')[0])
+                else:
+                    e_date = pd.to_datetime(cal.loc['Earnings Date'].iloc[0])
+                    
                 if e_date and pd.notnull(e_date):
-                    if datetime.now() < e_date < selected_date: earnings_veto = True
-            except: pass
+                    if datetime.now() < e_date < selected_date: 
+                        earnings_veto = True
+            except: 
+                pass
                 
-            if current_price < ema_8 and rsi_14 < 45: base_risk = "🔴 ***FALLING KNIFE***"
-            elif current_price > ema_8 and rsi_14 < 50: base_risk = "🟢 ***FLOOR CONFIRMED***"
-            elif adx_14 > 25: base_risk = f"🟡 ***TRENDING***: ADX {adx_14:.1f}"
-            elif current_price > ma_20: base_risk = "🟢 ***NEUTRAL CHOP***"
-            else: base_risk = "🟡 ***MED RISK***"
+            if current_price < ema_8 and rsi_14 < 45: 
+                base_risk = "🔴 ***FALLING KNIFE***"
+            elif current_price > ema_8 and rsi_14 < 50: 
+                base_risk = "🟢 ***FLOOR CONFIRMED***"
+            elif adx_14 > 25: 
+                base_risk = f"🟡 ***TRENDING***: ADX {adx_14:.1f}"
+            elif current_price > ma_20: 
+                base_risk = "🟢 ***NEUTRAL CHOP***"
+            else: 
+                base_risk = "🟡 ***MED RISK***"
 
             risk = base_risk + (" [EARNINGS SOON]" if earnings_veto else "")
             ivr_color = "#09ab3b" if (isinstance(ivr, str) and ivr != "N/A" and float(ivr) > 50) else "#a6a6a6"
 
             with st.expander(f"{symbol} | Price: ${current_price:.2f} | IVR: {ivr} | Risk: {risk}", expanded=False):
                 c1, c2, c3, c4 = st.columns(4)
-                with c1: st.markdown(custom_metric_box("Today's Change", f"${current_price:.2f}", f"{change_pct:+.2f}%", sub_color=change_color), unsafe_allow_html=True)
-                with c2: st.markdown(custom_metric_box("Put Strike", f"${put_strike}", f"Trip: ${put_trip}"), unsafe_allow_html=True)
-                with c3: st.markdown(custom_metric_box("Call Strike", f"${call_strike}", f"Trip: ${call_trip}"), unsafe_allow_html=True)
-                with c4: st.markdown(custom_metric_box("Volatility Rank", f"IVR: {ivr}", f"ATM IV: {atm_iv_display}", val_color=ivr_color), unsafe_allow_html=True)
+                with c1: 
+                    st.markdown(custom_metric_box("Today's Change", f"${current_price:.2f}", f"{change_pct:+.2f}%", sub_color=change_color), unsafe_allow_html=True)
+                with c2: 
+                    st.markdown(custom_metric_box("Put Strike", f"${put_strike}", f"Trip: ${put_trip}"), unsafe_allow_html=True)
+                with c3: 
+                    st.markdown(custom_metric_box("Call Strike", f"${call_strike}", f"Trip: ${call_trip}"), unsafe_allow_html=True)
+                with c4: 
+                    st.markdown(custom_metric_box("Volatility Rank", f"IVR: {ivr}", f"ATM IV: {atm_iv_display}", val_color=ivr_color), unsafe_allow_html=True)
                 
                 fig = go.Figure(data=[go.Candlestick(x=hist.index[-60:], open=hist['Open'][-60:], high=hist['High'][-60:], low=hist['Low'][-60:], close=hist['Close'][-60:], name="Price")])
                 fig.add_trace(go.Scatter(x=hist.index[-60:], y=hist['Close'].ewm(span=8, adjust=False).mean()[-60:], line=dict(color='#ff9900', width=1.5, dash='dot'), name="8-EMA"))
-                fig.add_hline(y=call_strike, line_width=2, line_color="green"); fig.add_hline(y=put_strike, line_width=2, line_color="red")
+                fig.add_hline(y=call_strike, line_width=2, line_color="green")
+                fig.add_hline(y=put_strike, line_width=2, line_color="red")
                 fig.update_layout(template="plotly_dark", height=350, margin=dict(l=0, r=0, t=20, b=0), xaxis_rangeslider_visible=False)
                 st.plotly_chart(fig, use_container_width=True)
-        except Exception as e: st.error(f"Error {symbol}: {str(e)}")
+                
+        except Exception as e: 
+            st.error(f"Error processing {symbol}: {str(e)}")
 
-        with tab_deepdive:
+with tab_deepdive:
     st.markdown("### 🔬 Automated Quantitative Analyst")
     deep_ticker = st.text_input("Enter Ticker for Deep Dive:", key="dd_ticker").upper().strip()
+    
     if deep_ticker:
         try:
             t_dd = yf.Ticker(deep_ticker)
             hist_dd = t_dd.history(period="1y")
-            if len(hist_dd) < 100: st.warning("Insufficient history.")
+            
+            if len(hist_dd) < 100: 
+                st.warning("Insufficient trading history to process.")
             else:
                 dd_price = hist_dd['Close'].iloc[-1]
                 sma_20_dd = hist_dd['Close'].rolling(20).mean().iloc[-1]
                 poc_dd, sup1_dd, _, res1_dd, _ = calculate_volume_nodes(hist_dd, dd_price)
                 
-                # Fetch ATM IV for Deep Dive
-                dd_iv = 0.3 # Default
+                dd_iv = 0.30 
                 try:
                     chain_dd = t_dd.option_chain(t_dd.options[0])
-                    dd_iv = chain_dd.calls.loc[(chain_dd.calls['strike'] - dd_price).abs().idxmin(), 'impliedVolatility']
-                except: pass
+                    calls_dd = chain_dd.calls
+                    closest_idx_dd = (calls_dd['strike'] - dd_price).abs().idxmin()
+                    dd_iv = calls_dd.loc[closest_idx_dd, 'impliedVolatility']
+                except: 
+                    pass
                 
                 ivr_val = calculate_ivr(hist_dd, dd_iv)
                 ivr_text = f"{ivr_val:.1f}" if isinstance(ivr_val, (int, float)) else "N/A"
                 
                 st.markdown("---")
                 col1, col2 = st.columns([1, 1])
+                
                 with col1:
                     st.subheader("Underwriting Translation")
                     st.write(f"**Current Price:** ${dd_price:.2f}")
                     st.write(f"**IV Rank:** {ivr_text}")
                     
                     if isinstance(ivr_val, (int, float)) and ivr_val > 50:
-                        st.success("🎯 **TASTYTRADE SIGNAL:** High IV Rank. Ideal for Selling Iron Condors.")
+                        st.success("🎯 **TASTYTRADE SIGNAL:** High IV Rank. Premium is inflated. Ideal environment for Selling Iron Condors.")
                     elif isinstance(ivr_val, (int, float)) and ivr_val < 20:
-                        st.info("🧊 **LOW VOLATILITY:** IV Rank is suppressed. Avoid Condors; look for Debit Spreads.")
+                        st.info("🧊 **LOW VOLATILITY:** IV Rank is suppressed. Premium is cheap. Avoid Condors; look for net-debit directional trades.")
                     else:
                         st.warning("⚖️ **NEUTRAL VOL:** IV is in the middle of its yearly range.")
 
-                    st.markdown(f"**Structure:** POC at {poc_dd.replace('$', r'\$')}. Support 1 at {sup1_dd.replace('$', r'\$')}.")
+                    st.markdown(f"**Structure:** POC is located at {poc_dd.replace('$', r'\$')}. First floor support is at {sup1_dd.replace('$', r'\$')}.")
+                    
                 with col2:
                     fig_dd = go.Figure(data=[go.Candlestick(x=hist_dd.index[-90:], open=hist_dd['Open'][-90:], high=hist_dd['High'][-90:], low=hist_dd['Low'][-90:], close=hist_dd['Close'][-90:])])
                     fig_dd.update_layout(template="plotly_dark", height=400, margin=dict(l=0, r=0, t=10, b=0), xaxis_rangeslider_visible=False)
                     st.plotly_chart(fig_dd, use_container_width=True)
-        except Exception as e: st.error(f"Deep Dive Error: {str(e)}")
+                    
+        except Exception as e: 
+            st.error(f"Deep Dive Processing Error: {str(e)}")
