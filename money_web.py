@@ -32,15 +32,19 @@ def calculate_adx(hist, period=14):
         high, low, close = hist['High'], hist['Low'], hist['Close']
         plus_dm = high.diff()
         minus_dm = low.diff()
+        
         plus_dm = np.where((plus_dm > minus_dm) & (plus_dm > 0), plus_dm, 0.0)
         minus_dm = np.where((minus_dm > plus_dm) & (minus_dm > 0), minus_dm, 0.0)
+        
         tr1 = high - low
         tr2 = abs(high - close.shift(1))
         tr3 = abs(low - close.shift(1))
         tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        
         atr = tr.ewm(alpha=1/period, adjust=False).mean()
         plus_di = 100 * (pd.Series(plus_dm, index=high.index).ewm(alpha=1/period, adjust=False).mean() / atr)
         minus_di = 100 * (pd.Series(minus_dm, index=high.index).ewm(alpha=1/period, adjust=False).mean() / atr)
+        
         dx = (abs(plus_di - minus_di) / abs(plus_di + minus_di)) * 100
         adx = dx.ewm(alpha=1/period, adjust=False).mean()
         return adx.iloc[-1]
@@ -78,24 +82,32 @@ def calculate_volume_nodes(hist, current_price, bins=30):
         price_bins = np.linspace(min_p, max_p, bins)
         inds = np.digitize(hist['Close'], price_bins)
         vol_profile = np.zeros(bins)
+        
         for i in range(len(hist)):
             if 0 <= inds[i]-1 < bins:
                 vol_profile[inds[i]-1] += hist['Volume'].iloc[i]
+                
         poc = price_bins[np.argmax(vol_profile)]
         peaks = []
         mean_vol = np.mean(vol_profile)
+        
         for i in range(1, bins-1):
-            if vol_profile[i] > vol_profile[i-1] and vol_profile[i] > vol_profile[i+1] and vol_profile[i] > mean_vol * 0.5:
+            if (vol_profile[i] > vol_profile[i-1] and 
+                vol_profile[i] > vol_profile[i+1] and 
+                vol_profile[i] > mean_vol * 0.5):
                 peaks.append(price_bins[i])
+                
         upper = sorted([p for p in peaks if p > current_price])
         lower = sorted([p for p in peaks if p < current_price])
+        
         r1 = f"${upper[0]:.2f}" if len(upper) > 0 else "Sky (None)"
         r2 = f"${upper[1]:.2f}" if len(upper) > 1 else "⚠️ No Wall"
         s1 = f"${lower[-1]:.2f}" if len(lower) > 0 else "Freefall (None)"
         s2 = f"${lower[-2]:.2f}" if len(lower) > 1 else "⚠️ No Wall"
+        
         return f"${poc:.2f}", s1, s2, r1, r2
     except:
-        return "N/A", "N/
+        return "N/A", "N/A", "N/A", "N/A", "N/A"
 
 @st.cache_data(ttl=3600)  
 def get_friday_expirations():
@@ -140,6 +152,7 @@ def custom_metric_box(label, value, sub_value, val_color="#FAFAFA", sub_color="#
 # --- SIDEBAR ---
 st.sidebar.header("🛠️ Dashboard Controls")
 url_bench = load_url_bench()
+
 if 'custom_bench' not in st.session_state:
     st.session_state['custom_bench'] = list(set(url_bench + ["SPY", "QQQ"]))
 if 'active_selections' not in st.session_state:
@@ -170,8 +183,17 @@ z_score = Z_SCORES[prob_target]
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📡 Range-Bound Radar")
-LIQUID_50 = ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA', 'AMD', 'PLTR', 'NFLX', 'BA', 'DIS', 'BABA', 'UBER', 'COIN', 'HOOD', 'INTC', 'MU', 'AVGO', 'TSM', 'JPM', 'BAC', 'C', 'V', 'MA', 'PYPL', 'SQ', 'WMT', 'TGT', 'COST', 'HD', 'SBUX', 'NKE', 'MCD', 'XOM', 'CVX', 'CAT', 'GE', 'JNJ', 'PFE', 'UNH', 'LLY', 'CMCSA', 'VZ', 'T', 'QCOM', 'CRM', 'SNOW', 'SHOP', 'SPOT']
+
+LIQUID_50 = [
+    'AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA', 'AMD', 'PLTR', 'NFLX', 
+    'BA', 'DIS', 'BABA', 'UBER', 'COIN', 'HOOD', 'INTC', 'MU', 'AVGO', 'TSM', 
+    'JPM', 'BAC', 'C', 'V', 'MA', 'PYPL', 'SQ', 'WMT', 'TGT', 'COST', 
+    'HD', 'SBUX', 'NKE', 'MCD', 'XOM', 'CVX', 'CAT', 'GE', 'JNJ', 'PFE', 
+    'UNH', 'LLY', 'CMCSA', 'VZ', 'T', 'QCOM', 'CRM', 'SNOW', 'SHOP', 'SPOT'
+]
+
 scan_tol = st.sidebar.slider("Tolerance (%)", 3, 15, 8) / 100.0
+
 if st.sidebar.button("Run Radar Scan Now"):
     targets = run_radar_scan(LIQUID_50, scan_tol)
     if targets: 
@@ -263,12 +285,14 @@ with tab_scanner:
                         all_strikes = sorted(list(set(calls['strike'].tolist() + puts['strike'].tolist())))
                         mp_val = float('inf')
                         mp_strike = "N/A"
+                        
                         for s in all_strikes:
                             c_loss = calls[calls['strike'] < s].apply(lambda x: (s - x['strike']) * x['openInterest'], axis=1).sum()
                             p_loss = puts[puts['strike'] > s].apply(lambda x: (x['strike'] - s) * x['openInterest'], axis=1).sum()
                             if (c_loss + p_loss) < mp_val: 
                                 mp_val = c_loss + p_loss
                                 mp_strike = s
+                                
                         if mp_strike != "N/A": 
                             max_pain = f"${mp_strike:.2f}"
             except: 
