@@ -7,6 +7,12 @@ import plotly.graph_objects as go
 import urllib.request
 import json
 
+try:
+    import google.generativeai as genai
+    GENAI_AVAILABLE = True
+except ImportError:
+    GENAI_AVAILABLE = False
+
 # --- CONFIG & THEME ---
 st.set_page_config(page_title="Aegis Option Scanner", layout="wide", initial_sidebar_state="expanded")
 st.markdown("<h2 style='font-size: 2.2rem; margin-bottom: 0rem;'>🛡️ Aegis Option Scanner | Volatility & Directional Edge</h2>", unsafe_allow_html=True)
@@ -162,6 +168,9 @@ def custom_metric_box(label, value, sub_value, val_color="#FAFAFA", sub_color="#
 # --- SIDEBAR ---
 st.sidebar.header("🛠️ Dashboard Controls")
 
+# AI KEY INJECTION
+gemini_api_key = st.sidebar.text_input("🔑 Gemini API Key (For AI Co-Pilot)", type="password", help="Get a free key at aistudio.google.com")
+
 vix_v, vix_p, fg_v, fg_r = fetch_macro_data()
 st.sidebar.markdown("### 🌍 Macro Sentiment")
 mac1, mac2 = st.sidebar.columns(2)
@@ -257,7 +266,7 @@ if len(selected_tickers) > 1:
             st.write("Not enough data.")
 
 st.markdown("---")
-tab_scanner, tab_deepdive = st.tabs(["🛡️ Option Scanner", "🔬 Technical Deep Dive (Auto-Analyst)"])
+tab_scanner, tab_deepdive, tab_ai = st.tabs(["🛡️ Option Scanner", "🔬 Technical Deep Dive", "🧠 AI Quant Co-Pilot"])
 
 with tab_scanner:
     for symbol in selected_tickers:
@@ -266,7 +275,6 @@ with tab_scanner:
             hist_1y = t.history(period="1y") 
             if len(hist_1y) < 20: continue
             
-            # Slice 3 months of data for the original technical analysis logic
             hist = hist_1y.tail(63) 
                 
             current_price = hist['Close'].iloc[-1]
@@ -357,8 +365,7 @@ with tab_scanner:
                 st.markdown("---")
                 st.caption("🛡️ Risk Underwriting Data")
                 u1, u2, u3 = st.columns(3)
-                with u1:
-                    st.markdown(custom_metric_box("Max Pain", f"{max_pain}", "Gravity point for Friday", sub_color="#a6a6a6"), unsafe_allow_html=True)
+                with u1: st.markdown(custom_metric_box("Max Pain", f"{max_pain}", "Gravity point for Friday", sub_color="#a6a6a6"), unsafe_allow_html=True)
                 with u2:
                     pc_color, pc_sub = "#a6a6a6", "Neutral Flow"
                     try:
@@ -441,11 +448,11 @@ with tab_deepdive:
                 returns_1y = hist_dd['Close'].pct_change().dropna()
                 hv_20 = returns_1y.rolling(window=20).std() * np.sqrt(252)
                 current_hv = hv_20.iloc[-1]
-                hv_rank = (hv_20.rank(pct=True).dropna().iloc[-1]) * 100
-
-                skew_status, skew_text = "⚖️ **Balanced Skew:**", "Put and Call implied volatilities are relatively balanced. No extreme directional panic is being priced in."
-                liq_status, liq_text = "⚖️ **Adequate Liquidity:**", "Volume is average. Use limit orders and be cautious of bid-ask spreads on wider multi-leg trades."
+                
+                skew_status, skew_text = "⚖️ **Balanced Skew:**", "Put and Call implied volatilities are relatively balanced."
+                liq_status, liq_text = "⚖️ **Adequate Liquidity:**", "Volume is average. Be cautious of bid-ask spreads."
                 atm_iv_dd = current_hv 
+                oi_fig = None
                 
                 try:
                     dd_dates = t_dd.options
@@ -453,10 +460,8 @@ with tab_deepdive:
                         dd_chain = t_dd.option_chain(dd_dates[0])
                         total_vol = dd_chain.calls['volume'].fillna(0).sum() + dd_chain.puts['volume'].fillna(0).sum()
                         avg_vol = total_vol / (len(dd_chain.calls) + len(dd_chain.puts))
-                        if avg_vol > 300:
-                            liq_status, liq_text = "🌊 **A+ Liquidity:**", "Highly liquid options chain. Slippage on multi-leg spreads and directional executions should be minimal."
-                        elif avg_vol < 50:
-                            liq_status, liq_text = "🧊 **Poor Liquidity:**", "Average option volume is extremely low. Trading multi-leg spreads here will result in massive slippage."
+                        if avg_vol > 300: liq_status, liq_text = "🌊 **A+ Liquidity:**", "Highly liquid options chain. Minimal slippage expected."
+                        elif avg_vol < 50: liq_status, liq_text = "🧊 **Poor Liquidity:**", "Low volume. Expect massive slippage."
                         
                         calls, puts = dd_chain.calls, dd_chain.puts
                         otm_call = calls[calls['strike'] >= dd_price * 1.1]
@@ -467,10 +472,20 @@ with tab_deepdive:
                             
                         if not otm_call.empty and not otm_put.empty:
                             skew_diff = otm_put.iloc[-1]['impliedVolatility'] - otm_call.iloc[0]['impliedVolatility']
-                            if skew_diff > 0.12:
-                                skew_status, skew_text = "🚨 **Severe Downside Skew:**", "Market pricing OTM Puts higher than Calls. Institutional money paying top dollar for crash protection."
-                            elif skew_diff < -0.12:
-                                skew_status, skew_text = "🚀 **Upside Call Skew:**", "OTM Calls pricing higher than Puts. Market anticipating explosive upside risk."
+                            if skew_diff > 0.12: skew_status, skew_text = "🚨 **Severe Downside Skew:**", "Market pricing OTM Puts higher than Calls. Crash protection is expensive."
+                            elif skew_diff < -0.12: skew_status, skew_text = "🚀 **Upside Call Skew:**", "OTM Calls pricing higher than Puts. Market anticipating upside."
+                                
+                        calls_oi = calls[['strike', 'openInterest']].copy()
+                        puts_oi = puts[['strike', 'openInterest']].copy()
+                        lb, ub = dd_price * 0.85, dd_price * 1.15
+                        calls_oi = calls_oi[(calls_oi['strike'] >= lb) & (calls_oi['strike'] <= ub)]
+                        puts_oi = puts_oi[(puts_oi['strike'] >= lb) & (puts_oi['strike'] <= ub)]
+                        
+                        oi_fig = go.Figure()
+                        oi_fig.add_trace(go.Bar(x=calls_oi['strike'], y=calls_oi['openInterest'], name='Call OI', marker_color='#09ab3b', opacity=0.7))
+                        oi_fig.add_trace(go.Bar(x=puts_oi['strike'], y=puts_oi['openInterest'], name='Put OI', marker_color='#ff4b4b', opacity=0.7))
+                        oi_fig.update_layout(title="Open Interest Profile (Nearest Expiry)", template="plotly_dark", height=300, margin=dict(l=0, r=0, t=30, b=0), barmode='group')
+                        oi_fig.add_vline(x=dd_price, line_width=2, line_dash="dash", line_color="white", annotation_text="Price")
                 except: pass
 
                 ivr_val = calculate_ivr(hist_dd, atm_iv_dd)
@@ -478,55 +493,123 @@ with tab_deepdive:
 
                 if dd_price > sma_20_dd and dd_price > sma_50_dd: trend_status, trend_text = "🟢 **Bullish Uptrend:**", f"Trading at \${dd_price:.2f}, above 20MA and 50MA."
                 elif dd_price < sma_20_dd and dd_price < sma_50_dd: trend_status, trend_text = "🔴 **Bearish Downtrend:**", f"Trading at \${dd_price:.2f}, below 20MA and 50MA."
-                else: trend_status, trend_text = "🟡 **Mixed / Consolidation:**", f"Caught in battleground at \${dd_price:.2f} between moving averages."
+                else: trend_status, trend_text = "🟡 **Mixed / Consolidation:**", f"Caught in battleground at \${dd_price:.2f}."
 
-                if rsi_14_dd > 70: mom_status, mom_text = "🔥 **Overbought:**", f"RSI running hot ({rsi_14_dd:.1f}). Pullback likely."
-                elif rsi_14_dd < 30: mom_status, mom_text = "🧊 **Oversold:**", f"RSI indicates punishment ({rsi_14_dd:.1f}). Bounce possible."
+                if rsi_14_dd > 70: mom_status, mom_text = "🔥 **Overbought:**", f"RSI running hot ({rsi_14_dd:.1f})."
+                elif rsi_14_dd < 30: mom_status, mom_text = "🧊 **Oversold:**", f"RSI indicates punishment ({rsi_14_dd:.1f})."
                 else: mom_status, mom_text = "⚖️ **Neutral Momentum:**", f"RSI balanced ({rsi_14_dd:.1f})."
-                if adx_14_dd > 25: mom_text += f" ADX is high ({adx_14_dd:.1f}), confirming strong directional conviction."
+                if adx_14_dd > 25: mom_text += f" ADX is high ({adx_14_dd:.1f}), confirming trend."
 
                 struct_text = f"POC located at **{poc_dd}**. "
-                if sup1_dd != "Freefall (None)": struct_text += f"Buyers to defend floor around **{sup1_dd}**. "
-                if res1_dd != "Sky (None)": struct_text += f"Sellers to create ceiling around **{res1_dd}**."
+                if sup1_dd != "Freefall (None)": struct_text += f"Support floor around **{sup1_dd}**. "
+                if res1_dd != "Sky (None)": struct_text += f"Resistance ceiling around **{res1_dd}**."
                 struct_text = struct_text.replace("$", r"\$")
 
-                if isinstance(ivr_val, (int, float)) and ivr_val > 50:
-                    vol_status, vol_text = "🔥 **TASTYTRADE SELL ZONE (High IVR):**", f"IV Rank is **{ivr_str}**. Premiums are inflated relative to the past year. Optimal environment for selling Iron Condors and net-credit spreads."
-                elif isinstance(ivr_val, (int, float)) and ivr_val < 20:
-                    vol_status, vol_text = "🧊 **LOW VOLATILITY (Low IVR):**", f"IV Rank is dead (**{ivr_str}**). Premiums are dangerously cheap. Avoid selling premium; consider net-debit directional trades."
-                else:
-                    vol_status, vol_text = "⚖️ **Neutral Volatility:**", f"IV Rank is **{ivr_str}**. Premiums are trading near fair historical value."
+                if isinstance(ivr_val, (int, float)) and ivr_val > 50: vol_status, vol_text = "🔥 **TASTYTRADE SELL ZONE:**", f"IVR is **{ivr_str}**. Premiums inflated. Sell Iron Condors."
+                elif isinstance(ivr_val, (int, float)) and ivr_val < 20: vol_status, vol_text = "🧊 **LOW VOLATILITY:**", f"IVR is dead (**{ivr_str}**). Avoid selling premium."
+                else: vol_status, vol_text = "⚖️ **Neutral Volatility:**", f"IVR is **{ivr_str}**. Premiums at fair value."
 
                 sqz_status, sqz_text = ("🚨 **High Squeeze Risk:**", f"**{short_pct*100:.1f}%** float sold short.") if short_pct > 0.10 else ("✅ **Low Squeeze Risk:**", f"Minimal short interest ({short_pct*100:.1f}%).")
-                inst_text = f"Institutions control **{inst_pct*100:.1f}%**. "
-                if target_price and target_price > 0: inst_text += f"Wall St target: **\${target_price:.2f}**."
-
+                
                 implied_14d_move = dd_price * (atm_iv_dd * np.sqrt(14 / 365))
-                if (atr_14 * np.sqrt(14)) > (implied_14d_move * 1.15): fat_status, fat_text = "⚠️ **Fat Tail Risk:**", "Actual multi-day price swings (ATR) are larger than what options are pricing. Widen strikes."
-                else: fat_status, fat_text = "✅ **Expected Distribution:**", "Historical swings are within bounds priced by options."
+                if (atr_14 * np.sqrt(14)) > (implied_14d_move * 1.15): fat_status, fat_text = "⚠️ **Fat Tail Risk:**", "Historical swings outpace options pricing. Widen strikes."
+                else: fat_status, fat_text = "✅ **Expected Distribution:**", "Swings within options bounds."
 
                 st.markdown("---")
                 st.subheader(f"Underwriting Translation for {deep_ticker}")
                 col1, col2 = st.columns([1, 1])
                 with col1:
                     st.markdown("#### 📈 1. Technical Framework")
-                    st.markdown(f"{trend_status} {trend_text}")
-                    st.markdown(f"{mom_status} {mom_text}")
-                    st.markdown(f"🏛️ **Price Magnets:** {struct_text}")
-                    st.markdown("#### ⚖️ 2. Premium & Liquidity Context")
-                    st.markdown(f"{vol_status} {vol_text}")
-                    st.markdown(f"{liq_status} {liq_text}")
-                    st.markdown(f"{skew_status} {skew_text}")
-                    st.markdown("#### 🛡️ 3. Tail Risk & Conviction")
-                    st.markdown(f"{sqz_status} {sqz_text}")
-                    st.markdown(f"{fat_status} {fat_text}")
-                    st.markdown(f"🏦 **Institutional Backing:** {inst_text}")
+                    st.markdown(f"{trend_status} {trend_text}"); st.markdown(f"{mom_status} {mom_text}"); st.markdown(f"🏛️ **Price Magnets:** {struct_text}")
+                    st.markdown("#### ⚖️ 2. Premium Context")
+                    st.markdown(f"{vol_status} {vol_text}"); st.markdown(f"{liq_status} {liq_text}"); st.markdown(f"{skew_status} {skew_text}")
+                    st.markdown("#### 🛡️ 3. Tail Risk")
+                    st.markdown(f"{sqz_status} {sqz_text}"); st.markdown(f"{fat_status} {fat_text}")
                 with col2:
-                    st.markdown("#### Visual Reference")
                     fig_dd = go.Figure(data=[go.Candlestick(x=hist_6mo.index, open=hist_6mo['Open'], high=hist_6mo['High'], low=hist_6mo['Low'], close=hist_6mo['Close'], name="Price")])
-                    fig_dd.add_trace(go.Scatter(x=hist_6mo.index, y=hist_6mo['Close'].rolling(window=20).mean(), line=dict(color='blue', width=1.5), name="20-MA"))
-                    fig_dd.add_trace(go.Scatter(x=hist_6mo.index, y=hist_6mo['Close'].rolling(window=50).mean(), line=dict(color='purple', width=1.5), name="50-MA"))
-                    fig_dd.update_layout(template="plotly_dark", height=450, margin=dict(l=0, r=0, t=10, b=0), xaxis_rangeslider_visible=False)
+                    fig_dd.update_layout(template="plotly_dark", height=300, margin=dict(l=0, r=0, t=10, b=0), xaxis_rangeslider_visible=False)
                     st.plotly_chart(fig_dd, use_container_width=True)
-        except Exception as e:
-            st.error(f"Error: {str(e)}")
+                    if oi_fig: st.plotly_chart(oi_fig, use_container_width=True)
+        except Exception as e: st.error(f"Error: {str(e)}")
+
+        with tab_ai:
+    st.markdown("### 🧠 AI Quant Co-Pilot")
+    st.write("Compare tickers, ask for a trade thesis, or summarize data using Google Gemini.")
+    
+    if not GENAI_AVAILABLE:
+        st.error("⚠️ `google-generativeai` library not found. Please run `pip install google-generativeai` in your terminal.")
+    else:
+        ai_tickers = st.multiselect(
+            "1. Select Tickers to include in AI Context (It will fetch their live data behind the scenes):", 
+            options=st.session_state['custom_bench'],
+            default=[selected_tickers[0]] if selected_tickers else []
+        )
+        
+        user_prompt = st.text_area(
+            "2. Enter your question for the AI:", 
+            placeholder="e.g., Compare the IV Rank, Point of Control, and Short Interest of ASTS vs RKLB. Which is better for an Iron Condor?"
+        )
+        
+        if st.button("Ask Gemini 🤖"):
+            if not gemini_api_key:
+                st.warning("⚠️ Please enter your Gemini API Key in the sidebar controls.")
+            elif not ai_tickers:
+                st.warning("⚠️ Please select at least one ticker from the dropdown.")
+            elif not user_prompt:
+                st.warning("⚠️ Please enter a prompt.")
+            else:
+                with st.spinner("Fetching live quantitative data and consulting Gemini..."):
+                    try:
+                        genai.configure(api_key=gemini_api_key)
+                        # We use gemini-1.5-flash as it is fast and highly capable for text/data parsing
+                        model = genai.GenerativeModel('gemini-1.5-flash')
+                        
+                        context_str = "CURRENT QUANTITATIVE MARKET DATA:\n"
+                        for sym in ai_tickers:
+                            try:
+                                t_ai = yf.Ticker(sym)
+                                hist_ai = t_ai.history(period="1y")
+                                if len(hist_ai) < 50: continue
+                                price = hist_ai['Close'].iloc[-1]
+                                
+                                hist_6mo = hist_ai.tail(126)
+                                rsi = calculate_rsi(hist_6mo['Close']).iloc[-1]
+                                adx = calculate_adx(hist_6mo)
+                                poc, s1, s2, r1, r2 = calculate_volume_nodes(hist_6mo, price)
+                                
+                                atm_iv = 0.3
+                                try:
+                                    calls = t_ai.option_chain(t_ai.options[0]).calls
+                                    atm_iv = calls.iloc[(calls['strike'] - price).abs().argsort()[:1]]['impliedVolatility'].values[0]
+                                except: pass
+                                
+                                ivr = calculate_ivr(hist_ai, atm_iv)
+                                ivr_str = f"{ivr:.1f}" if isinstance(ivr, (int, float)) else "N/A"
+                                
+                                short_pct = t_ai.info.get('shortPercentOfFloat', 0) * 100
+                                
+                                context_str += f"\n--- {sym} ---\n"
+                                context_str += f"Price: ${price:.2f}\n"
+                                context_str += f"IV Rank (IVR): {ivr_str}\n"
+                                context_str += f"RSI (14): {rsi:.1f}\n"
+                                context_str += f"ADX Trend Strength: {adx:.1f}\n"
+                                context_str += f"Point of Control (POC): {poc}\n"
+                                context_str += f"Support Floors: {s1}, {s2}\n"
+                                context_str += f"Resistance Ceilings: {r1}, {r2}\n"
+                                context_str += f"Short Interest: {short_pct:.1f}%\n"
+                            except Exception as data_err:
+                                context_str += f"\n--- {sym} ---\nCould not fetch data: {str(data_err)}\n"
+                                
+                        final_prompt = (
+                            "System: You are an expert quantitative options trader and volatility analyst, familiar with Tastytrade mechanics. "
+                            "Use the provided quantitative data to answer the user's query intelligently. Keep your response structured, actionable, and focused on the data.\n\n"
+                            f"{context_str}\n\n"
+                            f"User Query: {user_prompt}"
+                        )
+                        
+                        response = model.generate_content(final_prompt)
+                        st.markdown("### 🤖 AI Response")
+                        st.info(response.text)
+                        
+                    except Exception as e:
+                        st.error(f"AI Generation Error. Check your API key. Error details: {str(e)}")
