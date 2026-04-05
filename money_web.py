@@ -1,3 +1,4 @@
+# --- START OF PART 1 ---
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -99,7 +100,10 @@ def calculate_volume_nodes(hist, current_price, bins=30):
         return f"${poc:.2f}", s1, s2, r1, r2
     except:
         return "N/A", "N/A", "N/A", "N/A", "N/A"
-        @st.cache_data(ttl=3600)  
+# --- END OF PART 1 ---
+
+# --- START OF PART 2 ---
+@st.cache_data(ttl=3600)  
 def get_friday_expirations():
     try:
         spy = yf.Ticker("SPY")
@@ -182,6 +186,9 @@ with mac2:
     st.markdown(custom_metric_box("Fear & Greed", str(fg_v), str(fg_r), val_color=fg_color), unsafe_allow_html=True)
 
 st.sidebar.markdown("---")
+# --- END OF PART 2 ---
+
+# --- START OF PART 3 ---
 url_bench = load_url_bench()
 if 'custom_bench' not in st.session_state:
     st.session_state['custom_bench'] = list(set(url_bench + ["SPY", "QQQ"]))
@@ -264,6 +271,9 @@ if len(selected_tickers) > 1:
 
 st.markdown("---")
 tab_scanner, tab_deepdive, tab_ai = st.tabs(["🛡️ Option Scanner", "🔬 Technical Deep Dive", "🧠 AI Quant Co-Pilot"])
+# --- END OF PART 3 ---
+
+# --- START OF PART 4 ---
 with tab_scanner:
     for symbol in selected_tickers:
         try:
@@ -407,7 +417,10 @@ with tab_scanner:
 
         except Exception as e:
             st.error(f"Error loading {symbol}: {str(e)}")
-            with tab_deepdive:
+# --- END OF PART 4 ---
+
+# --- START OF PART 5 ---
+with tab_deepdive:
     st.markdown("### 🔬 Automated Quantitative Analyst")
     st.write("Enter a single ticker below. The system will process the underlying mathematics, liquidity, and tail risks to translate the chart structure into plain English.")
     
@@ -526,7 +539,10 @@ with tab_scanner:
                     st.plotly_chart(fig_dd, use_container_width=True)
                     if oi_fig: st.plotly_chart(oi_fig, use_container_width=True)
         except Exception as e: st.error(f"Error: {str(e)}")
-            with tab_ai:
+# --- END OF PART 5 ---
+
+# --- START OF PART 6 ---
+with tab_ai:
     st.markdown("### 🧠 AI Quant Co-Pilot")
     st.write("Compare tickers, ask for a trade thesis, or summarize data using Google Gemini.")
     
@@ -608,3 +624,4 @@ with tab_scanner:
                         
                     except Exception as e:
                         st.error(f"AI Generation Error. Check your API key. Error details: {str(e)}")
+# --- END OF PART 6 ---
