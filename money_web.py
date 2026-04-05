@@ -99,8 +99,7 @@ def calculate_volume_nodes(hist, current_price, bins=30):
         return f"${poc:.2f}", s1, s2, r1, r2
     except:
         return "N/A", "N/A", "N/A", "N/A", "N/A"
-
-@st.cache_data(ttl=3600)  
+        @st.cache_data(ttl=3600)  
 def get_friday_expirations():
     try:
         spy = yf.Ticker("SPY")
@@ -168,7 +167,6 @@ def custom_metric_box(label, value, sub_value, val_color="#FAFAFA", sub_color="#
 # --- SIDEBAR ---
 st.sidebar.header("🛠️ Dashboard Controls")
 
-# AI KEY INJECTION
 gemini_api_key = st.sidebar.text_input("🔑 Gemini API Key (For AI Co-Pilot)", type="password", help="Get a free key at aistudio.google.com")
 
 vix_v, vix_p, fg_v, fg_r = fetch_macro_data()
@@ -184,7 +182,6 @@ with mac2:
     st.markdown(custom_metric_box("Fear & Greed", str(fg_v), str(fg_r), val_color=fg_color), unsafe_allow_html=True)
 
 st.sidebar.markdown("---")
-
 url_bench = load_url_bench()
 if 'custom_bench' not in st.session_state:
     st.session_state['custom_bench'] = list(set(url_bench + ["SPY", "QQQ"]))
@@ -267,7 +264,6 @@ if len(selected_tickers) > 1:
 
 st.markdown("---")
 tab_scanner, tab_deepdive, tab_ai = st.tabs(["🛡️ Option Scanner", "🔬 Technical Deep Dive", "🧠 AI Quant Co-Pilot"])
-
 with tab_scanner:
     for symbol in selected_tickers:
         try:
@@ -411,8 +407,7 @@ with tab_scanner:
 
         except Exception as e:
             st.error(f"Error loading {symbol}: {str(e)}")
-
-with tab_deepdive:
+            with tab_deepdive:
     st.markdown("### 🔬 Automated Quantitative Analyst")
     st.write("Enter a single ticker below. The system will process the underlying mathematics, liquidity, and tail risks to translate the chart structure into plain English.")
     
@@ -531,13 +526,12 @@ with tab_deepdive:
                     st.plotly_chart(fig_dd, use_container_width=True)
                     if oi_fig: st.plotly_chart(oi_fig, use_container_width=True)
         except Exception as e: st.error(f"Error: {str(e)}")
-
-        with tab_ai:
+            with tab_ai:
     st.markdown("### 🧠 AI Quant Co-Pilot")
     st.write("Compare tickers, ask for a trade thesis, or summarize data using Google Gemini.")
     
     if not GENAI_AVAILABLE:
-        st.error("⚠️ `google-generativeai` library not found. Please run `pip install google-generativeai` in your terminal.")
+        st.error("⚠️ `google-generativeai` library not found. Please add it to your requirements.")
     else:
         ai_tickers = st.multiselect(
             "1. Select Tickers to include in AI Context (It will fetch their live data behind the scenes):", 
@@ -561,7 +555,6 @@ with tab_deepdive:
                 with st.spinner("Fetching live quantitative data and consulting Gemini..."):
                     try:
                         genai.configure(api_key=gemini_api_key)
-                        # We use gemini-1.5-flash as it is fast and highly capable for text/data parsing
                         model = genai.GenerativeModel('gemini-1.5-flash')
                         
                         context_str = "CURRENT QUANTITATIVE MARKET DATA:\n"
@@ -569,7 +562,8 @@ with tab_deepdive:
                             try:
                                 t_ai = yf.Ticker(sym)
                                 hist_ai = t_ai.history(period="1y")
-                                if len(hist_ai) < 50: continue
+                                if len(hist_ai) < 50: 
+                                    continue
                                 price = hist_ai['Close'].iloc[-1]
                                 
                                 hist_6mo = hist_ai.tail(126)
@@ -581,7 +575,8 @@ with tab_deepdive:
                                 try:
                                     calls = t_ai.option_chain(t_ai.options[0]).calls
                                     atm_iv = calls.iloc[(calls['strike'] - price).abs().argsort()[:1]]['impliedVolatility'].values[0]
-                                except: pass
+                                except: 
+                                    pass
                                 
                                 ivr = calculate_ivr(hist_ai, atm_iv)
                                 ivr_str = f"{ivr:.1f}" if isinstance(ivr, (int, float)) else "N/A"
