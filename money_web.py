@@ -7,6 +7,9 @@ from datetime import datetime, timedelta
 import plotly.graph_objects as go
 import urllib.request
 import json
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 try:
     import google.generativeai as genai
@@ -17,6 +20,19 @@ except ImportError:
 # --- CONFIG & THEME ---
 st.set_page_config(page_title="Aegis Option Scanner", layout="wide", initial_sidebar_state="expanded")
 st.markdown("<h2 style='font-size: 2.2rem; margin-bottom: 0rem;'>🛡️ Aegis Option Scanner | Volatility & Directional Edge</h2>", unsafe_allow_html=True)
+
+# --- RATE LIMIT RESILIENCE ENGINE ---
+@st.cache_resource
+def get_yf_session():
+    """Creates a resilient session that auto-retries when Yahoo rate-limits the app."""
+    session = requests.Session()
+    retry = Retry(total=3, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount('http://', adapter)
+    session.mount('https://', adapter)
+    return session
+
+yf_session = get_yf_session()
 
 # --- PROBABILITY Z-SCORES ---
 Z_SCORES = {
@@ -103,20 +119,21 @@ def calculate_volume_nodes(hist, current_price, bins=30):
 # --- END OF PART 1 ---
 # --- START OF PART 2 ---
 @st.cache_data(ttl=3600)  
-def get_friday_expirations():
+def get_expanded_expirations():
+    """Fetches up to 40 expirations, including Thursdays for holiday weeks."""
     try:
-        spy = yf.Ticker("SPY")
+        spy = yf.Ticker("SPY", session=yf_session)
         dates = spy.options
-        fridays = [d for d in dates if datetime.strptime(d, '%Y-%m-%d').weekday() == 4]
-        return fridays[:10]
+        valid_dates = [d for d in dates if datetime.strptime(d, '%Y-%m-%d').weekday() in [3, 4]]
+        return valid_dates[:40] 
     except:
-        return [(datetime.now() + timedelta(days=i)).strftime('%Y-%m-%d') for i in range(14, 60) if (datetime.now() + timedelta(days=i)).weekday() == 4]
+        return [(datetime.now() + timedelta(days=i)).strftime('%Y-%m-%d') for i in range(14, 180) if (datetime.now() + timedelta(days=i)).weekday() in [3, 4]]
 
 @st.cache_data(ttl=3600) 
 def run_radar_scan(ticker_list, threshold):
     found_targets = []
     try:
-        bulk_data = yf.download(ticker_list, period="1mo", group_by='ticker', progress=False)
+        bulk_data = yf.download(ticker_list, period="1mo", group_by='ticker', progress=False, session=yf_session)
         for sym in ticker_list:
             try:
                 if len(ticker_list) > 1:
@@ -135,7 +152,7 @@ def run_radar_scan(ticker_list, threshold):
 def fetch_macro_data():
     vix_val, vix_pct = "N/A", "N/A"
     try:
-        vix_hist = yf.Ticker("^VIX").history(period="5d")
+        vix_hist = yf.Ticker("^VIX", session=yf_session).history(period="5d")
         if len(vix_hist) >= 2:
             vix_val = float(vix_hist['Close'].iloc[-1])
             vix_pct = float(((vix_val - vix_hist['Close'].iloc[-2]) / vix_hist['Close'].iloc[-2]) * 100)
@@ -170,7 +187,6 @@ def custom_metric_box(label, value, sub_value, val_color="#FAFAFA", sub_color="#
 # --- SIDEBAR ---
 st.sidebar.header("🛠️ Dashboard Controls")
 
-# AI KEY INJECTION (Uses Streamlit Secrets if available)
 gemini_api_key = ""
 if "GEMINI_API_KEY" in st.secrets:
     gemini_api_key = st.secrets["GEMINI_API_KEY"]
@@ -216,9 +232,9 @@ if st.sidebar.button("🔗 Generate Custom Link"):
     st.sidebar.success("URL updated!")
 
 st.sidebar.markdown("---")
-available_fridays = get_friday_expirations()
-if available_fridays:
-    selected_date_str = st.sidebar.selectbox("Expiration:", options=available_fridays)
+available_expirations = get_expanded_expirations()
+if available_expirations:
+    selected_date_str = st.sidebar.selectbox("Expiration:", options=available_expirations)
     selected_date = datetime.strptime(selected_date_str, '%Y-%m-%d')
     dte = (selected_date - datetime.now()).days
 else:
@@ -265,7 +281,7 @@ with st.expander("📖 Terminal Indicator Glossary (Quick Reference)", expanded=
 if len(selected_tickers) > 1:
     with st.expander("🧩 Portfolio Risk: 30-Day Correlation Matrix", expanded=False):
         try:
-            bench_data = yf.download(selected_tickers, period="3mo", progress=False)['Close']
+            bench_data = yf.download(selected_tickers, period="3mo", progress=False, session=yf_session)['Close']
             returns = bench_data.pct_change().tail(30)
             corr_matrix = returns.corr()
             st.dataframe(corr_matrix.style.background_gradient(cmap='coolwarm', axis=None).format("{:.2f}"))
@@ -279,7 +295,7 @@ tab_scanner, tab_deepdive, tab_ai = st.tabs(["🛡️ Option Scanner", "🔬 Tec
 with tab_scanner:
     for symbol in selected_tickers:
         try:
-            t = yf.Ticker(symbol)
+            t = yf.Ticker(symbol, session=yf_session)
             hist_1y = t.history(period="1y") 
             if len(hist_1y) < 20: continue
             
@@ -429,7 +445,7 @@ with tab_deepdive:
     
     if deep_ticker:
         try:
-            t_dd = yf.Ticker(deep_ticker)
+            t_dd = yf.Ticker(deep_ticker, session=yf_session)
             hist_dd = t_dd.history(period="1y") 
             
             if len(hist_dd) < 50:
@@ -572,7 +588,6 @@ with tab_ai:
                     try:
                         genai.configure(api_key=gemini_api_key)
                         
-                        # --- AUTO-DETECT BEST AVAILABLE MODEL ---
                         available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
                         
                         if 'models/gemini-1.5-flash' in available_models:
@@ -594,7 +609,7 @@ with tab_ai:
                         context_str = "CURRENT QUANTITATIVE MARKET DATA:\n"
                         for sym in ai_tickers:
                             try:
-                                t_ai = yf.Ticker(sym)
+                                t_ai = yf.Ticker(sym, session=yf_session)
                                 hist_ai = t_ai.history(period="1y")
                                 if len(hist_ai) < 50: 
                                     continue
