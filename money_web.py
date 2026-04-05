@@ -101,7 +101,6 @@ def calculate_volume_nodes(hist, current_price, bins=30):
     except:
         return "N/A", "N/A", "N/A", "N/A", "N/A"
 # --- END OF PART 1 ---
-
 # --- START OF PART 2 ---
 @st.cache_data(ttl=3600)  
 def get_friday_expirations():
@@ -171,7 +170,12 @@ def custom_metric_box(label, value, sub_value, val_color="#FAFAFA", sub_color="#
 # --- SIDEBAR ---
 st.sidebar.header("🛠️ Dashboard Controls")
 
-gemini_api_key = st.sidebar.text_input("🔑 Gemini API Key (For AI Co-Pilot)", type="password", help="Get a free key at aistudio.google.com")
+# AI KEY INJECTION (Uses Streamlit Secrets if available)
+gemini_api_key = ""
+if "GEMINI_API_KEY" in st.secrets:
+    gemini_api_key = st.secrets["GEMINI_API_KEY"]
+else:
+    gemini_api_key = st.sidebar.text_input("🔑 Gemini API Key (For AI Co-Pilot)", type="password", help="Add to Streamlit Secrets to hide this.")
 
 vix_v, vix_p, fg_v, fg_r = fetch_macro_data()
 st.sidebar.markdown("### 🌍 Macro Sentiment")
@@ -187,7 +191,6 @@ with mac2:
 
 st.sidebar.markdown("---")
 # --- END OF PART 2 ---
-
 # --- START OF PART 3 ---
 url_bench = load_url_bench()
 if 'custom_bench' not in st.session_state:
@@ -272,7 +275,6 @@ if len(selected_tickers) > 1:
 st.markdown("---")
 tab_scanner, tab_deepdive, tab_ai = st.tabs(["🛡️ Option Scanner", "🔬 Technical Deep Dive", "🧠 AI Quant Co-Pilot"])
 # --- END OF PART 3 ---
-
 # --- START OF PART 4 ---
 with tab_scanner:
     for symbol in selected_tickers:
@@ -418,7 +420,6 @@ with tab_scanner:
         except Exception as e:
             st.error(f"Error loading {symbol}: {str(e)}")
 # --- END OF PART 4 ---
-
 # --- START OF PART 5 ---
 with tab_deepdive:
     st.markdown("### 🔬 Automated Quantitative Analyst")
@@ -540,7 +541,6 @@ with tab_deepdive:
                     if oi_fig: st.plotly_chart(oi_fig, use_container_width=True)
         except Exception as e: st.error(f"Error: {str(e)}")
 # --- END OF PART 5 ---
-
 # --- START OF PART 6 ---
 with tab_ai:
     st.markdown("### 🧠 AI Quant Co-Pilot")
@@ -562,7 +562,7 @@ with tab_ai:
         
         if st.button("Ask Gemini 🤖"):
             if not gemini_api_key:
-                st.warning("⚠️ Please enter your Gemini API Key in the sidebar controls.")
+                st.warning("⚠️ Please enter your Gemini API Key in the sidebar controls (or add it to Streamlit Secrets).")
             elif not ai_tickers:
                 st.warning("⚠️ Please select at least one ticker from the dropdown.")
             elif not user_prompt:
@@ -573,7 +573,6 @@ with tab_ai:
                         genai.configure(api_key=gemini_api_key)
                         
                         # --- AUTO-DETECT BEST AVAILABLE MODEL ---
-                        # This queries the API to see exactly what your key is allowed to use
                         available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
                         
                         if 'models/gemini-1.5-flash' in available_models:
@@ -585,7 +584,6 @@ with tab_ai:
                         elif 'models/gemini-pro' in available_models:
                             target_model = 'gemini-pro'
                         elif len(available_models) > 0:
-                            # Absolute fallback: just use the first text model available
                             target_model = available_models[0].replace('models/', '')
                         else:
                             st.error("No valid text models found for this API key.")
