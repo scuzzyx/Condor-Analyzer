@@ -7,7 +7,6 @@ from datetime import datetime, timedelta
 import plotly.graph_objects as go
 import urllib.request
 import json
-import time
 
 try:
     import google.generativeai as genai
@@ -102,112 +101,96 @@ def calculate_volume_nodes(hist, current_price, bins=30):
     except:
         return "N/A", "N/A", "N/A", "N/A", "N/A"
 # --- END OF PART 1 ---
-
-# --- START OF PART 1 ---
-import streamlit as st
-import yfinance as yf
-import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
-import plotly.graph_objects as go
-import urllib.request
-import json
-import time
-
-try:
-    import google.generativeai as genai
-    GENAI_AVAILABLE = True
-except ImportError:
-    GENAI_AVAILABLE = False
-
-# --- CONFIG & THEME ---
-st.set_page_config(page_title="Aegis Option Scanner", layout="wide", initial_sidebar_state="expanded")
-st.markdown("<h2 style='font-size: 2.2rem; margin-bottom: 0rem;'>🛡️ Aegis Option Scanner | Volatility & Directional Edge</h2>", unsafe_allow_html=True)
-
-# --- PROBABILITY Z-SCORES ---
-Z_SCORES = {
-    "70%": 1.04, "75%": 1.15, "80%": 1.28, 
-    "85%": 1.44, "90%": 1.645, "95%": 1.96
-}
-
-def load_url_bench():
-    if "bench" in st.query_params:
-        return st.query_params["bench"].split(",")
-    return ["AMZN", "AAPL", "MSFT", "META", "GOOGL", "NVDA", "AMD", "PLTR", "TSLA", "NFLX"]
-
-def calculate_rsi(data, periods=14):
-    delta = data.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=periods).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=periods).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
-
-def calculate_adx(hist, period=14):
+# --- START OF PART 2 ---
+@st.cache_data(ttl=3600)  
+def get_expanded_expirations():
+    """Fetches up to 40 expirations, including Thursdays for holiday weeks."""
     try:
-        high, low, close = hist['High'], hist['Low'], hist['Close']
-        plus_dm = high.diff()
-        minus_dm = low.diff()
-        plus_dm = np.where((plus_dm > minus_dm) & (plus_dm > 0), plus_dm, 0.0)
-        minus_dm = np.where((minus_dm > plus_dm) & (minus_dm > 0), minus_dm, 0.0)
-        tr1 = high - low
-        tr2 = abs(high - close.shift(1))
-        tr3 = abs(low - close.shift(1))
-        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-        atr = tr.ewm(alpha=1/period, adjust=False).mean()
-        plus_di = 100 * (pd.Series(plus_dm, index=high.index).ewm(alpha=1/period, adjust=False).mean() / atr)
-        minus_di = 100 * (pd.Series(minus_dm, index=high.index).ewm(alpha=1/period, adjust=False).mean() / atr)
-        dx = (abs(plus_di - minus_di) / abs(plus_di + minus_di)) * 100
-        adx = dx.ewm(alpha=1/period, adjust=False).mean()
-        return adx.iloc[-1]
+        spy = yf.Ticker("SPY")
+        dates = spy.options
+        valid_dates = [d for d in dates if datetime.strptime(d, '%Y-%m-%d').weekday() in [3, 4]]
+        return valid_dates[:40] 
     except:
-        return 20 
+        return [(datetime.now() + timedelta(days=i)).strftime('%Y-%m-%d') for i in range(14, 180) if (datetime.now() + timedelta(days=i)).weekday() in [3, 4]]
 
-def calculate_ivr(hist_1y, current_iv):
+@st.cache_data(ttl=3600) 
+def run_radar_scan(ticker_list, threshold):
+    found_targets = []
     try:
-        if current_iv == "N/A" or current_iv is None: 
-            return "N/A"
-        curr_iv_val = float(current_iv.replace('%', '')) / 100 if isinstance(current_iv, str) else current_iv
-        returns = hist_1y['Close'].pct_change().dropna()
-        hv_series = returns.rolling(20).std() * np.sqrt(252)
-        hv_min, hv_max = hv_series.min(), hv_series.max()
-        ivr = ((curr_iv_val - hv_min) / (hv_max - hv_min)) * 100
-        return max(0, min(100, ivr))
-    except:
-        return "N/A"
+        bulk_data = yf.download(ticker_list, period="1mo", group_by='ticker', progress=False)
+        for sym in ticker_list:
+            try:
+                if len(ticker_list) > 1:
+                    hist = bulk_data[sym]['Close'].dropna()
+                else:
+                    hist = bulk_data['Close'].dropna()
+                if len(hist) > 10:
+                    h, l = hist.max(), hist.min()
+                    cur = hist.iloc[-1]
+                    if (h - l) / cur < threshold: found_targets.append(sym)
+            except: continue
+    except: pass
+    return found_targets
 
-def calculate_gap_risk(hist):
+@st.cache_data(ttl=900)
+def fetch_macro_data():
+    vix_val, vix_pct = "N/A", "N/A"
     try:
-        gaps = abs((hist['Open'] - hist['Close'].shift(1)) / hist['Close'].shift(1))
-        return gaps.tail(30).mean() * 100
-    except:
-        return 0
-
-def calculate_volume_nodes(hist, current_price, bins=30):
+        vix_hist = yf.Ticker("^VIX").history(period="5d")
+        if len(vix_hist) >= 2:
+            vix_val = float(vix_hist['Close'].iloc[-1])
+            vix_pct = float(((vix_val - vix_hist['Close'].iloc[-2]) / vix_hist['Close'].iloc[-2]) * 100)
+    except: pass
+    
+    fg_val, fg_rating = "N/A", "N/A"
     try:
-        min_p, max_p = hist['Low'].min(), hist['High'].max()
-        price_bins = np.linspace(min_p, max_p, bins)
-        inds = np.digitize(hist['Close'], price_bins)
-        vol_profile = np.zeros(bins)
-        for i in range(len(hist)):
-            if 0 <= inds[i]-1 < bins:
-                vol_profile[inds[i]-1] += hist['Volume'].iloc[i]
-        poc = price_bins[np.argmax(vol_profile)]
-        peaks = []
-        mean_vol = np.mean(vol_profile)
-        for i in range(1, bins-1):
-            if vol_profile[i] > vol_profile[i-1] and vol_profile[i] > vol_profile[i+1] and vol_profile[i] > mean_vol * 0.5:
-                peaks.append(price_bins[i])
-        upper = sorted([p for p in peaks if p > current_price])
-        lower = sorted([p for p in peaks if p < current_price])
-        r1 = f"${upper[0]:.2f}" if len(upper) > 0 else "Sky (None)"
-        r2 = f"${upper[1]:.2f}" if len(upper) > 1 else "⚠️ No Wall"
-        s1 = f"${lower[-1]:.2f}" if len(lower) > 0 else "Freefall (None)"
-        s2 = f"${lower[-2]:.2f}" if len(lower) > 1 else "⚠️ No Wall"
-        return f"${poc:.2f}", s1, s2, r1, r2
-    except:
-        return "N/A", "N/A", "N/A", "N/A", "N/A"
-# --- END OF PART 1 ---
+        url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+            'Accept': 'application/json',
+            'Referer': 'https://edition.cnn.com/'
+        }
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=5) as response:
+            data = json.loads(response.read().decode())
+            fg_val = round(data['fear_and_greed']['score'])
+            fg_rating = data['fear_and_greed']['rating'].title()
+    except: pass
+    
+    return vix_val, vix_pct, fg_val, fg_rating
 
+def custom_metric_box(label, value, sub_value, val_color="#FAFAFA", sub_color="#a6a6a6"):
+    return f"""
+    <div style="line-height: 1.4; margin-bottom: 14px;">
+        <span style="font-size: 0.85rem; color: #a6a6a6; font-family: sans-serif;">{label}</span><br>
+        <span style="font-size: 1.8rem; font-weight: 600; color: {val_color}; font-family: sans-serif;">{value}</span><br>
+        <span style="font-size: 0.9rem; font-weight: 500; color: {sub_color}; font-family: sans-serif;">{sub_value}</span>
+    </div>
+    """
+
+# --- SIDEBAR ---
+st.sidebar.header("🛠️ Dashboard Controls")
+
+gemini_api_key = ""
+if "GEMINI_API_KEY" in st.secrets:
+    gemini_api_key = st.secrets["GEMINI_API_KEY"]
+else:
+    gemini_api_key = st.sidebar.text_input("🔑 Gemini API Key (For AI Co-Pilot)", type="password", help="Add to Streamlit Secrets to hide this.")
+
+vix_v, vix_p, fg_v, fg_r = fetch_macro_data()
+st.sidebar.markdown("### 🌍 Macro Sentiment")
+mac1, mac2 = st.sidebar.columns(2)
+with mac1:
+    vix_color = "#ff4b4b" if (isinstance(vix_p, float) and vix_p > 0) else "#09ab3b"
+    v_val_str = f"{vix_v:.2f}" if isinstance(vix_v, float) else "N/A"
+    v_pct_str = f"{vix_p:+.2f}%" if isinstance(vix_p, float) else ""
+    st.markdown(custom_metric_box("VIX Index", v_val_str, v_pct_str, sub_color=vix_color), unsafe_allow_html=True)
+with mac2:
+    fg_color = "#09ab3b" if (isinstance(fg_v, int) and fg_v >= 55) else ("#ff4b4b" if (isinstance(fg_v, int) and fg_v <= 45) else "#ffcc00")
+    st.markdown(custom_metric_box("Fear & Greed", str(fg_v), str(fg_r), val_color=fg_color), unsafe_allow_html=True)
+
+st.sidebar.markdown("---")
+# --- END OF PART 2 ---
 # --- START OF PART 3 ---
 url_bench = load_url_bench()
 if 'custom_bench' not in st.session_state:
@@ -292,7 +275,6 @@ if len(selected_tickers) > 1:
 st.markdown("---")
 tab_scanner, tab_deepdive, tab_ai = st.tabs(["🛡️ Option Scanner", "🔬 Technical Deep Dive", "🧠 AI Quant Co-Pilot"])
 # --- END OF PART 3 ---
-
 # --- START OF PART 4 ---
 with tab_scanner:
     for symbol in selected_tickers:
@@ -438,7 +420,6 @@ with tab_scanner:
         except Exception as e:
             st.error(f"Error loading {symbol}: {str(e)}")
 # --- END OF PART 4 ---
-
 # --- START OF PART 5 ---
 with tab_deepdive:
     st.markdown("### 🔬 Automated Quantitative Analyst")
@@ -560,7 +541,6 @@ with tab_deepdive:
                     if oi_fig: st.plotly_chart(oi_fig, use_container_width=True)
         except Exception as e: st.error(f"Error: {str(e)}")
 # --- END OF PART 5 ---
-
 # --- START OF PART 6 ---
 with tab_ai:
     st.markdown("### 🧠 AI Quant Co-Pilot")
