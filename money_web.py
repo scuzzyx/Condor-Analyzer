@@ -571,7 +571,6 @@ with tab_ai:
                 with st.spinner("Fetching live quantitative data and consulting Gemini..."):
                     try:
                         genai.configure(api_key=gemini_api_key)
-                        model = genai.GenerativeModel('gemini-1.5-flash')
                         
                         context_str = "CURRENT QUANTITATIVE MARKET DATA:\n"
                         for sym in ai_tickers:
@@ -618,7 +617,19 @@ with tab_ai:
                             f"User Query: {user_prompt}"
                         )
                         
-                        response = model.generate_content(final_prompt)
+                        # Bulletproof Model Routing
+                        try:
+                            # Attempt 1: The latest fast model
+                            model = genai.GenerativeModel('gemini-1.5-flash-latest')
+                            response = model.generate_content(final_prompt)
+                        except Exception as inner_e:
+                            if "404" in str(inner_e):
+                                # Attempt 2: Fallback to universally available base model
+                                model = genai.GenerativeModel('gemini-pro')
+                                response = model.generate_content(final_prompt)
+                            else:
+                                raise inner_e # If it's not a 404, it's a real error (like a bad API key)
+                        
                         st.markdown("### 🤖 AI Response")
                         st.info(response.text)
                         
