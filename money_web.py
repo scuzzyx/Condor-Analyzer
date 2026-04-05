@@ -572,6 +572,27 @@ with tab_ai:
                     try:
                         genai.configure(api_key=gemini_api_key)
                         
+                        # --- AUTO-DETECT BEST AVAILABLE MODEL ---
+                        # This queries the API to see exactly what your key is allowed to use
+                        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+                        
+                        if 'models/gemini-1.5-flash' in available_models:
+                            target_model = 'gemini-1.5-flash'
+                        elif 'models/gemini-1.5-flash-latest' in available_models:
+                            target_model = 'gemini-1.5-flash-latest'
+                        elif 'models/gemini-1.0-pro' in available_models:
+                            target_model = 'gemini-1.0-pro'
+                        elif 'models/gemini-pro' in available_models:
+                            target_model = 'gemini-pro'
+                        elif len(available_models) > 0:
+                            # Absolute fallback: just use the first text model available
+                            target_model = available_models[0].replace('models/', '')
+                        else:
+                            st.error("No valid text models found for this API key.")
+                            st.stop()
+                            
+                        model = genai.GenerativeModel(target_model)
+                        
                         context_str = "CURRENT QUANTITATIVE MARKET DATA:\n"
                         for sym in ai_tickers:
                             try:
@@ -617,20 +638,8 @@ with tab_ai:
                             f"User Query: {user_prompt}"
                         )
                         
-                        # Bulletproof Model Routing
-                        try:
-                            # Attempt 1: The latest fast model
-                            model = genai.GenerativeModel('gemini-1.5-flash-latest')
-                            response = model.generate_content(final_prompt)
-                        except Exception as inner_e:
-                            if "404" in str(inner_e):
-                                # Attempt 2: Fallback to universally available base model
-                                model = genai.GenerativeModel('gemini-pro')
-                                response = model.generate_content(final_prompt)
-                            else:
-                                raise inner_e # If it's not a 404, it's a real error (like a bad API key)
-                        
-                        st.markdown("### 🤖 AI Response")
+                        response = model.generate_content(final_prompt)
+                        st.markdown(f"### 🤖 AI Response *(Powered by {target_model})*")
                         st.info(response.text)
                         
                     except Exception as e:
