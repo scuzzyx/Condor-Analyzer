@@ -61,10 +61,11 @@ def calculate_ivr(hist_1y, current_iv):
     try:
         if current_iv == "N/A" or current_iv is None: 
             return "N/A"
-        curr_iv_val = float(current_iv.replace('%', '')) / 100 if isinstance(current_iv, str) else current_iv
+        curr_iv_val = float(str(current_iv).replace('%', '')) / 100 
         returns = hist_1y['Close'].pct_change().dropna()
         hv_series = returns.rolling(20).std() * np.sqrt(252)
-        hv_min, hv_max = hv_series.min(), hv_series.max()
+        hv_min, hv_max = float(hv_series.min()), float(hv_series.max())
+        if hv_max == hv_min: return 50.0
         ivr = ((curr_iv_val - hv_min) / (hv_max - hv_min)) * 100
         return max(0, min(100, ivr))
     except:
@@ -79,19 +80,26 @@ def calculate_gap_risk(hist):
 
 def calculate_volume_nodes(hist, current_price, bins=30):
     try:
-        min_p, max_p = hist['Low'].min(), hist['High'].max()
+        min_p, max_p = float(hist['Low'].min()), float(hist['High'].max())
+        if min_p == max_p or pd.isna(min_p):
+            return f"${current_price:.2f}", "N/A", "N/A", "N/A", "N/A"
+            
         price_bins = np.linspace(min_p, max_p, bins)
-        inds = np.digitize(hist['Close'], price_bins)
+        inds = np.digitize(hist['Close'].fillna(current_price).values, price_bins)
         vol_profile = np.zeros(bins)
+        volumes = hist['Volume'].fillna(0).values
+        
         for i in range(len(hist)):
             if 0 <= inds[i]-1 < bins:
-                vol_profile[inds[i]-1] += hist['Volume'].iloc[i]
+                vol_profile[inds[i]-1] += volumes[i]
+                
         poc = price_bins[np.argmax(vol_profile)]
         peaks = []
         mean_vol = np.mean(vol_profile)
         for i in range(1, bins-1):
             if vol_profile[i] > vol_profile[i-1] and vol_profile[i] > vol_profile[i+1] and vol_profile[i] > mean_vol * 0.5:
                 peaks.append(price_bins[i])
+                
         upper = sorted([p for p in peaks if p > current_price])
         lower = sorted([p for p in peaks if p < current_price])
         r1 = f"${upper[0]:.2f}" if len(upper) > 0 else "Sky (None)"
@@ -102,7 +110,6 @@ def calculate_volume_nodes(hist, current_price, bins=30):
     except:
         return "N/A", "N/A", "N/A", "N/A", "N/A"
 # --- END OF PART 1 ---
-
 # --- START OF PART 2 ---
 @st.cache_data(ttl=86400)  
 def get_pure_fridays(weeks=26):
@@ -194,7 +201,6 @@ with mac2:
 
 st.sidebar.markdown("---")
 # --- END OF PART 2 ---
-
 # --- START OF PART 3 ---
 url_bench = load_url_bench()
 if 'custom_bench' not in st.session_state:
@@ -292,10 +298,15 @@ if len(selected_tickers) > 1:
 st.markdown("---")
 tab_scanner, tab_deepdive, tab_ai = st.tabs(["🛡️ Option Scanner", "🔬 Technical Deep Dive", "🧠 AI Quant Co-Pilot"])
 # --- END OF PART 3 ---
-
 # --- START OF PART 4 ---
 with tab_scanner:
-    for symbol in selected_tickers:
+    if selected_tickers:
+        st.markdown("##### 📡 Extracting Live Data Feed...")
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+    for idx, symbol in enumerate(selected_tickers):
+        status_text.text(f"Fetching structural data for {symbol}...")
         try:
             t = yf.Ticker(symbol)
             hist_1y = t.history(period="1y") 
@@ -326,15 +337,15 @@ with tab_scanner:
             
             atm_iv_raw = 0
             atm_iv_display, ivr, max_pain, pc_ratio = "N/A", "N/A", "N/A", "N/A"
-            target_date = selected_date_str # Default assignment to prevent NameError
+            target_date = selected_date_str 
             
             try:
                 valid_dates = t.options
-                if valid_dates:
-                    # --- HOLIDAY & MISSING DATE MAGNET ---
+                if not valid_dates:
+                    atm_iv_display = "⚠️ API Blocked"
+                else:
                     if target_date not in valid_dates:
                         try:
-                            # If exact date missing (holiday), snap to the closest available date in the chain
                             target_dt = datetime.strptime(target_date, '%Y-%m-%d')
                             valid_dts = [datetime.strptime(d, '%Y-%m-%d') for d in valid_dates]
                             closest_dt = min(valid_dts, key=lambda d: abs(d - target_dt))
@@ -348,21 +359,27 @@ with tab_scanner:
                     if not calls.empty:
                         closest_idx = (calls['strike'] - current_price).abs().idxmin()
                         atm_iv_raw = calls.loc[closest_idx, 'impliedVolatility']
-                        atm_iv_display = f"{atm_iv_raw * 100:.1f}%"
-                        ivr_val = calculate_ivr(hist_1y, atm_iv_raw)
-                        ivr = f"{ivr_val:.1f}" if isinstance(ivr_val, (int, float)) else "N/A"
+                        if pd.notna(atm_iv_raw):
+                            atm_iv_display = f"{atm_iv_raw * 100:.1f}%"
+                            ivr_val = calculate_ivr(hist_1y, atm_iv_raw)
+                            ivr = f"{ivr_val:.1f}" if isinstance(ivr_val, (int, float)) else "N/A"
                     
                     if not calls.empty and not puts.empty:
                         tot_put_oi, tot_call_oi = puts['openInterest'].sum(), calls['openInterest'].sum()
                         if tot_call_oi > 0: pc_ratio = f"{tot_put_oi / tot_call_oi:.2f}"
+                        
                         all_strikes = sorted(list(set(calls['strike'].tolist() + puts['strike'].tolist())))
-                        mp_val, mp_strike = float('inf'), "N/A"
+                        mp_val = float('inf')
+                        mp_strike = "N/A"
                         for s in all_strikes:
                             c_loss = calls[calls['strike'] < s].apply(lambda x: (s - x['strike']) * x['openInterest'], axis=1).sum()
                             p_loss = puts[puts['strike'] > s].apply(lambda x: (x['strike'] - s) * x['openInterest'], axis=1).sum()
-                            if (c_loss + p_loss) < mp_val: mp_val, mp_strike = c_loss + p_loss, s
+                            if (c_loss + p_loss) < mp_val: 
+                                mp_val = c_loss + p_loss
+                                mp_strike = s
                         if mp_strike != "N/A": max_pain = f"${mp_strike:.2f}"
-            except: pass
+            except Exception as e: 
+                atm_iv_display = "⚠️ Fetch Error"
 
             ex_div_date, ex_div_veto = "None scheduled", False
             try:
@@ -449,8 +466,17 @@ with tab_scanner:
 
         except Exception as e:
             st.error(f"Error loading {symbol}: {str(e)}")
+            
+        if selected_tickers:
+            progress_bar.progress((idx + 1) / len(selected_tickers))
+            time.sleep(0.5) # The Pacer: Bypasses YF Rate Limits
+            
+    if selected_tickers:
+        status_text.text("✅ Data Extraction Complete.")
+        time.sleep(1)
+        status_text.empty()
+        progress_bar.empty()
 # --- END OF PART 4 ---
-
 # --- START OF PART 5 ---
 with tab_deepdive:
     st.markdown("### 🔬 Automated Quantitative Analyst")
@@ -658,6 +684,8 @@ with tab_ai:
                                 context_str += f"Short Interest: {short_pct:.1f}%\n"
                             except Exception as data_err:
                                 context_str += f"\n--- {sym} ---\nCould not fetch data: {str(data_err)}\n"
+                            
+                            time.sleep(0.5) # AI Tab Anti-Rate-Limit Pacer
                                 
                         final_prompt = (
                             "System: You are an expert quantitative options trader and volatility analyst, familiar with Tastytrade mechanics. "
