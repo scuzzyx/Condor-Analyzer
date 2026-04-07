@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import plotly.graph_objects as go
 import urllib.request
 import json
+import time
 
 try:
     import google.generativeai as genai
@@ -100,8 +101,8 @@ def calculate_volume_nodes(hist, current_price, bins=30):
         return f"${poc:.2f}", s1, s2, r1, r2
     except:
         return "N/A", "N/A", "N/A", "N/A", "N/A"
-# --- END OF PART 1 ---
-# --- START OF PART 2 ---
+
+        # --- START OF PART 2 ---
 @st.cache_data(ttl=3600)  
 def get_expanded_expirations():
     """Fetches up to 40 expirations, including Thursdays for holiday weeks."""
@@ -191,6 +192,7 @@ with mac2:
 
 st.sidebar.markdown("---")
 # --- END OF PART 2 ---
+
 # --- START OF PART 3 ---
 url_bench = load_url_bench()
 if 'custom_bench' not in st.session_state:
@@ -229,6 +231,7 @@ z_score = Z_SCORES[prob_target]
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📡 Range-Bound Radar")
+st.sidebar.caption("Scan restricted to the Top 50 highest options liquidity stocks.")
 LIQUID_50 = ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA', 'AMD', 'PLTR', 'NFLX', 'BA', 'DIS', 'BABA', 'UBER', 'COIN', 'HOOD', 'INTC', 'MU', 'AVGO', 'TSM', 'JPM', 'BAC', 'C', 'V', 'MA', 'PYPL', 'SQ', 'WMT', 'TGT', 'COST', 'HD', 'SBUX', 'NKE', 'MCD', 'XOM', 'CVX', 'CAT', 'GE', 'JNJ', 'PFE', 'UNH', 'LLY', 'CMCSA', 'VZ', 'T', 'QCOM', 'CRM', 'SNOW', 'SHOP', 'SPOT']
 scan_tol = st.sidebar.slider("Tolerance (%)", 3, 15, 8) / 100.0
 if st.sidebar.button("Run Radar Scan Now"):
@@ -242,25 +245,29 @@ with st.expander("📖 Terminal Indicator Glossary (Quick Reference)", expanded=
     st.write("- **IV Rank (IVR):** Relates current IV to the 52-week high/low. >50 is Tastytrade territory.")
     st.write("- **⚠️ [EARNINGS SOON]:** Earnings report occurs before expiration. Trade with caution.")
     st.write("- **⚠️ [EX-DIVIDEND DANGER]:** Ex-Div date occurs before expiration. High risk of early call assignment.")
-    st.write("- **🔴 *FALLING KNIFE*:** Price below 8-EMA. Consider Call Spreads only.")
-    st.write("- **🟠 *GAP RISK*:** Historical tendency to jump >1.5% overnight.")
-    st.write("- **🟡 *TRENDING*:** ADX (>25). Stock is moving fast; pick a directional spread. Avoid Condors.")
-    st.write("- **🟢 *FLOOR CONFIRMED*:** 8-EMA Reclaimed. Consider Put Spreads only.")
-    st.write("- **🟢 *NEUTRAL CHOP*:** Ideal sideways environment for Iron Condors.")
+    st.write("- **🔴 *FALLING KNIFE* (Bearish Momentum):** Price below 8-EMA. Consider Call Spreads only.")
+    st.write("- **🟠 *GAP RISK* (Overnight Vol):** Historical tendency to jump >1.5% overnight.")
+    st.write("- **🟡 *TRENDING* (High ADX):** ADX (>25). Stock is moving fast; pick a directional spread. Avoid Condors.")
+    st.write("- **🟢 *FLOOR CONFIRMED* (Bullish Reversal):** 8-EMA Reclaimed. Consider Put Spreads only.")
+    st.write("- **🟢 *NEUTRAL CHOP* (Condor Territory):** Ideal sideways environment for Iron Condors.")
     
     g1, g2, g3 = st.columns(3)
     with g1:
-        st.subheader("🛡️ Trend")
-        st.write("**8-Day EMA:** Algorithmic Trend line.")
-        st.write("**RSI Stack:** Momentum indicator.")
+        st.subheader("🛡️ Trend & Momentum")
+        st.write("**8-Day EMA:** The 'Algorithmic Trend' line. Orange dotted line on chart.")
+        st.write("**RSI Stack:** Overbought (>70), Oversold (<30), Neutral (31-69).")
+        st.write("**ADX:** Above 25 = Strong Trend. Below 25 = Drifting/Chop.")
     with g2:
-        st.subheader("🎯 Structure")
-        st.write("**POC:** Point of Control. Price magnet.")
-        st.write("**Walls:** Support & Resistance floors/ceilings.")
+        st.subheader("🎯 Structure & Math")
+        st.write("**POC:** Highest volume price point in 90 days. Price magnet.")
+        st.write("**🔴 Support Walls:** Structural floor where buyers step in.")
+        st.write("**🟢 Resistance Walls:** Structural ceiling where sellers emerge.")
+        st.write("**Z-Score:** Probability math used to set the strike safety margin.")
     with g3:
-        st.subheader("⚖️ Risk")
-        st.write("**Max Pain:** Options seller's magnet strike.")
-        st.write("**P/C OI Ratio:** Put/Call Open Interest sentiment.")
+        st.subheader("⚖️ Risk Underwriting")
+        st.write("**Max Pain:** The strike where options sellers lose the least. Acts as a Friday price magnet.")
+        st.write("**P/C OI Ratio:** Put vs Call Open Interest. > 1.2 is Bearish flow, < 0.8 is Bullish flow.")
+        st.write("**Ex-Dividend:** The cutoff date to own the stock for a dividend. High risk for short calls.")
 
 if len(selected_tickers) > 1:
     with st.expander("🧩 Portfolio Risk: 30-Day Correlation Matrix", expanded=False):
@@ -275,6 +282,7 @@ if len(selected_tickers) > 1:
 st.markdown("---")
 tab_scanner, tab_deepdive, tab_ai = st.tabs(["🛡️ Option Scanner", "🔬 Technical Deep Dive", "🧠 AI Quant Co-Pilot"])
 # --- END OF PART 3 ---
+
 # --- START OF PART 4 ---
 with tab_scanner:
     for symbol in selected_tickers:
@@ -364,11 +372,13 @@ with tab_scanner:
             ivr_color = "#09ab3b" if (isinstance(ivr, str) and ivr != "N/A" and float(ivr) > 50) else "#a6a6a6"
 
             with st.expander(f"{symbol} | Price: ${current_price:.2f} | IVR: {ivr} | Risk: {risk}", expanded=False):
-                c1, c2, c3, c4 = st.columns(4)
+                # Using 5 columns now to fit Earnings Date back into the UI properly
+                c1, c2, c3, c4, c5 = st.columns(5)
                 with c1: st.markdown(custom_metric_box("Today's Change", f"${current_price:.2f}", f"{change_dlr:+.2f} ({change_pct:+.2f}%)", sub_color=change_color), unsafe_allow_html=True)
                 with c2: st.markdown(custom_metric_box("Put Strategy", f"${put_strike}", f"Trip Wire: ${put_trip}", sub_color="#ffcc00"), unsafe_allow_html=True)
                 with c3: st.markdown(custom_metric_box("Call Strategy", f"${call_strike}", f"Trip Wire: ${call_trip}", sub_color="#ffcc00"), unsafe_allow_html=True)
                 with c4: st.markdown(custom_metric_box("Volatility Rank", f"IVR: {ivr}", f"ATM IV: {atm_iv_display}", val_color=ivr_color), unsafe_allow_html=True)
+                with c5: st.markdown(custom_metric_box("Earnings Date", f"{earnings_date}", "Upcoming Catalyst", sub_color="#ffcc00" if earnings_veto else "#a6a6a6"), unsafe_allow_html=True)
                 
                 st.markdown("---")
                 st.caption("🛡️ Risk Underwriting Data")
@@ -420,7 +430,8 @@ with tab_scanner:
         except Exception as e:
             st.error(f"Error loading {symbol}: {str(e)}")
 # --- END OF PART 4 ---
-# --- START OF PART 5 ---
+
+            # --- START OF PART 5 ---
 with tab_deepdive:
     st.markdown("### 🔬 Automated Quantitative Analyst")
     st.write("Enter a single ticker below. The system will process the underlying mathematics, liquidity, and tail risks to translate the chart structure into plain English.")
@@ -541,7 +552,7 @@ with tab_deepdive:
                     if oi_fig: st.plotly_chart(oi_fig, use_container_width=True)
         except Exception as e: st.error(f"Error: {str(e)}")
 # --- END OF PART 5 ---
-# --- START OF PART 6 ---
+        # --- START OF PART 6 ---
 with tab_ai:
     st.markdown("### 🧠 AI Quant Co-Pilot")
     st.write("Compare tickers, ask for a trade thesis, or summarize data using Google Gemini.")
@@ -642,3 +653,4 @@ with tab_ai:
                     except Exception as e:
                         st.error(f"AI Generation Error. Check your API key. Error details: {str(e)}")
 # --- END OF PART 6 ---
+# --- END OF PART 1 ---
