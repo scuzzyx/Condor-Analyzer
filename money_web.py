@@ -59,13 +59,22 @@ def calculate_adx(hist, period=14):
 
 def calculate_ivr(hist_1y, current_iv):
     try:
-        if current_iv == "N/A" or current_iv is None: 
+        if current_iv == "N/A" or current_iv is None or pd.isna(current_iv): 
             return "N/A"
-        curr_iv_val = float(str(current_iv).replace('%', '')) / 100 
+            
+        # Detect if it's a string like "45.2%" or a raw float like 0.452
+        if isinstance(current_iv, str):
+            curr_iv_val = float(current_iv.replace('%', '')) / 100
+        else:
+            curr_iv_val = float(current_iv)
+            
+        # Calculate Realized Volatility proxy for 52-week range
         returns = hist_1y['Close'].pct_change().dropna()
         hv_series = returns.rolling(20).std() * np.sqrt(252)
         hv_min, hv_max = float(hv_series.min()), float(hv_series.max())
+        
         if hv_max == hv_min: return 50.0
+        
         ivr = ((curr_iv_val - hv_min) / (hv_max - hv_min)) * 100
         return max(0, min(100, ivr))
     except:
