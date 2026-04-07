@@ -255,25 +255,29 @@ with st.expander("📖 Terminal Indicator Glossary (Quick Reference)", expanded=
     st.write("- **IV Rank (IVR):** Relates current IV to the 52-week high/low. >50 is Tastytrade territory.")
     st.write("- **⚠️ [EARNINGS SOON]:** Earnings report occurs before expiration. Trade with caution.")
     st.write("- **⚠️ [EX-DIVIDEND DANGER]:** Ex-Div date occurs before expiration. High risk of early call assignment.")
-    st.write("- **🔴 *FALLING KNIFE*:** Price below 8-EMA. Consider Call Spreads only.")
-    st.write("- **🟠 *GAP RISK*:** Historical tendency to jump >1.5% overnight.")
-    st.write("- **🟡 *TRENDING*:** ADX (>25). Stock is moving fast; pick a directional spread. Avoid Condors.")
-    st.write("- **🟢 *FLOOR CONFIRMED*:** 8-EMA Reclaimed. Consider Put Spreads only.")
-    st.write("- **🟢 *NEUTRAL CHOP*:** Ideal sideways environment for Iron Condors.")
+    st.write("- **🔴 *FALLING KNIFE* (Bearish Momentum):** Price below 8-EMA. Consider Call Spreads only.")
+    st.write("- **🟠 *GAP RISK* (Overnight Vol):** Historical tendency to jump >1.5% overnight.")
+    st.write("- **🟡 *TRENDING* (High ADX):** ADX (>25). Stock is moving fast; pick a directional spread. Avoid Condors.")
+    st.write("- **🟢 *FLOOR CONFIRMED* (Bullish Reversal):** 8-EMA Reclaimed. Consider Put Spreads only.")
+    st.write("- **🟢 *NEUTRAL CHOP* (Condor Territory):** Ideal sideways environment for Iron Condors.")
     
     g1, g2, g3 = st.columns(3)
     with g1:
-        st.subheader("🛡️ Trend")
-        st.write("**8-Day EMA:** Algorithmic Trend line.")
-        st.write("**RSI Stack:** Momentum indicator.")
+        st.subheader("🛡️ Trend & Momentum")
+        st.write("**8-Day EMA:** The 'Algorithmic Trend' line. Orange dotted line on chart.")
+        st.write("**RSI Stack:** Overbought (>70), Oversold (<30), Neutral (31-69).")
+        st.write("**ADX:** Above 25 = Strong Trend. Below 25 = Drifting/Chop.")
     with g2:
-        st.subheader("🎯 Structure")
-        st.write("**POC:** Point of Control. Price magnet.")
-        st.write("**Walls:** Support & Resistance floors/ceilings.")
+        st.subheader("🎯 Structure & Math")
+        st.write("**POC:** Highest volume price point in 90 days. Price magnet.")
+        st.write("**🔴 Support Walls:** Structural floor where buyers step in.")
+        st.write("**🟢 Resistance Walls:** Structural ceiling where sellers emerge.")
+        st.write("**Z-Score:** Probability math used to set the strike safety margin.")
     with g3:
-        st.subheader("⚖️ Risk")
-        st.write("**Max Pain:** Options seller's magnet strike.")
-        st.write("**P/C OI Ratio:** Put/Call Open Interest sentiment.")
+        st.subheader("⚖️ Risk Underwriting")
+        st.write("**Max Pain:** The strike where options sellers lose the least. Acts as a Friday price magnet.")
+        st.write("**P/C OI Ratio:** Put vs Call Open Interest. > 1.2 is Bearish flow, < 0.8 is Bullish flow.")
+        st.write("**Ex-Dividend:** The cutoff date to own the stock for a dividend. High risk for short calls.")
 
 if len(selected_tickers) > 1:
     with st.expander("🧩 Portfolio Risk: 30-Day Correlation Matrix", expanded=False):
