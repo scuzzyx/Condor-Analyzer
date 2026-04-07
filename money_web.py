@@ -326,12 +326,12 @@ with tab_scanner:
             
             atm_iv_raw = 0
             atm_iv_display, ivr, max_pain, pc_ratio = "N/A", "N/A", "N/A", "N/A"
+            target_date = selected_date_str # Default assignment to prevent NameError
             
             try:
                 valid_dates = t.options
                 if valid_dates:
                     # --- HOLIDAY & MISSING DATE MAGNET ---
-                    target_date = selected_date_str
                     if target_date not in valid_dates:
                         try:
                             # If exact date missing (holiday), snap to the closest available date in the chain
