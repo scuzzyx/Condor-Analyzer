@@ -19,10 +19,14 @@ except ImportError:
 st.set_page_config(page_title="Aegis Option Scanner", layout="wide", initial_sidebar_state="expanded")
 st.markdown("<h2 style='font-size: 2.2rem; margin-bottom: 0rem;'>🛡️ Aegis Option Scanner | Volatility & Directional Edge</h2>", unsafe_allow_html=True)
 
-# --- PROBABILITY Z-SCORES ---
-Z_SCORES = {
-    "70%": 1.04, "75%": 1.15, "80%": 1.28, 
-    "85%": 1.44, "90%": 1.645, "95%": 1.96
+# --- DELTA TARGETS (Z-Score Equivalents) ---
+DELTAS = {
+    "30 Delta (Aggressive)": 0.52, 
+    "25 Delta": 0.67, 
+    "20 Delta": 0.84, 
+    "16 Delta (1 SD)": 1.00, 
+    "10 Delta (Conservative)": 1.28, 
+    "5 Delta (Ultra Safe)": 1.645
 }
 
 def load_url_bench():
@@ -132,6 +136,38 @@ def get_pure_fridays(weeks=26):
         fridays.append((next_friday + timedelta(weeks=i)).strftime('%Y-%m-%d'))
     return fridays
 
+# --- YFINANCE CACHED HELPERS (RATE LIMIT PROTECTION) ---
+@st.cache_data(ttl=900)
+def fetch_cached_history(symbol, period="1y"):
+    try: return yf.Ticker(symbol).history(period=period)
+    except: return pd.DataFrame()
+
+@st.cache_data(ttl=900)
+def fetch_cached_options_dates(symbol):
+    try: return yf.Ticker(symbol).options
+    except: return ()
+
+@st.cache_data(ttl=900)
+def fetch_cached_option_chain(symbol, date_str):
+    try:
+        chain = yf.Ticker(symbol).option_chain(date_str)
+        return chain.calls, chain.puts
+    except: return pd.DataFrame(), pd.DataFrame()
+
+@st.cache_data(ttl=3600)
+def fetch_cached_info(symbol):
+    try: return yf.Ticker(symbol).info
+    except: return {}
+
+@st.cache_data(ttl=3600)
+def fetch_cached_calendar(symbol):
+    try:
+        cal = yf.Ticker(symbol).calendar
+        if isinstance(cal, pd.DataFrame): return cal.to_dict()
+        if isinstance(cal, dict): return cal
+        return {}
+    except: return {}
+
 @st.cache_data(ttl=3600) 
 def run_radar_scan(ticker_list, threshold):
     found_targets = []
@@ -155,7 +191,7 @@ def run_radar_scan(ticker_list, threshold):
 def fetch_macro_data():
     vix_val, vix_pct = "N/A", "N/A"
     try:
-        vix_hist = yf.Ticker("^VIX").history(period="5d")
+        vix_hist = fetch_cached_history("^VIX", period="5d")
         if len(vix_hist) >= 2:
             vix_val = float(vix_hist['Close'].iloc[-1])
             vix_pct = float(((vix_val - vix_hist['Close'].iloc[-2]) / vix_hist['Close'].iloc[-2]) * 100)
@@ -251,8 +287,8 @@ selected_date = datetime.strptime(selected_date_str, '%Y-%m-%d')
 dte = (selected_date - datetime.now()).days
 if dte < 0: dte = 0
 
-prob_target = st.sidebar.selectbox("Probability Target:", options=list(Z_SCORES.keys()), index=4)
-z_score = Z_SCORES[prob_target]
+delta_target = st.sidebar.selectbox("Target Option Delta:", options=list(DELTAS.keys()), index=3)
+z_score = DELTAS[delta_target]
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📡 Range-Bound Radar")
@@ -287,7 +323,7 @@ with st.expander("📖 Terminal Indicator Glossary (Quick Reference)", expanded=
         st.write("**POC:** Highest volume price point in 90 days. Price magnet.")
         st.write("**🔴 Support Walls:** Structural floor where buyers step in.")
         st.write("**🟢 Resistance Walls:** Structural ceiling where sellers emerge.")
-        st.write("**Z-Score:** Probability math used to set the strike safety margin.")
+        st.write("**Delta Target:** The target probability used to calculate your premium strikes.")
     with g3:
         st.subheader("⚖️ Risk Underwriting")
         st.write("**Max Pain:** The strike where options sellers lose the least. Acts as a Friday price magnet.")
@@ -317,8 +353,7 @@ with tab_scanner:
     for idx, symbol in enumerate(selected_tickers):
         status_text.text(f"Fetching structural data for {symbol}...")
         try:
-            t = yf.Ticker(symbol)
-            hist_1y = t.history(period="1y") 
+            hist_1y = fetch_cached_history(symbol)
             if len(hist_1y) < 20: continue
             
             hist = hist_1y.tail(63) 
@@ -349,7 +384,7 @@ with tab_scanner:
             target_date = selected_date_str 
             
             try:
-                valid_dates = t.options
+                valid_dates = fetch_cached_options_dates(symbol)
                 if not valid_dates:
                     atm_iv_display = "⚠️ API Blocked"
                 else:
@@ -362,8 +397,7 @@ with tab_scanner:
                         except:
                             target_date = valid_dates[0]
                     
-                    chain = t.option_chain(target_date)
-                    calls, puts = chain.calls, chain.puts
+                    calls, puts = fetch_cached_option_chain(symbol, target_date)
                     
                     if not calls.empty:
                         closest_idx = (calls['strike'] - current_price).abs().idxmin()
@@ -392,7 +426,8 @@ with tab_scanner:
 
             ex_div_date, ex_div_veto = "None scheduled", False
             try:
-                ex_ts = t.info.get('exDividendDate')
+                info_data = fetch_cached_info(symbol)
+                ex_ts = info_data.get('exDividendDate')
                 if ex_ts:
                     ex_dt = datetime.fromtimestamp(ex_ts)
                     ex_div_date = ex_dt.strftime('%Y-%m-%d')
@@ -401,11 +436,16 @@ with tab_scanner:
 
             earnings_date, earnings_veto = "Not scheduled", False
             try:
-                cal = t.calendar
-                e_date = pd.to_datetime(cal.get('Earnings Date')[0]) if isinstance(cal, dict) else pd.to_datetime(cal.loc['Earnings Date'].iloc[0])
-                if e_date and pd.notnull(e_date):
-                    earnings_date = e_date.strftime('%Y-%m-%d')
-                    if datetime.now() < e_date < selected_date: earnings_veto = True
+                cal = fetch_cached_calendar(symbol)
+                if cal and 'Earnings Date' in cal:
+                    e_data = cal['Earnings Date']
+                    e_date = None
+                    if isinstance(e_data, list) and len(e_data) > 0: e_date = pd.to_datetime(e_data[0])
+                    elif isinstance(e_data, dict) and len(e_data) > 0: e_date = pd.to_datetime(list(e_data.values())[0])
+                    
+                    if e_date and pd.notnull(e_date):
+                        earnings_date = e_date.strftime('%Y-%m-%d')
+                        if datetime.now() < e_date < selected_date: earnings_veto = True
             except: pass
 
             if current_price < ema_8 and rsi_14 < 45: base_risk = "🔴 ***FALLING KNIFE***: Call Spreads Only"
@@ -478,7 +518,7 @@ with tab_scanner:
             
         if selected_tickers:
             progress_bar.progress((idx + 1) / len(selected_tickers))
-            time.sleep(0.5) # The Pacer: Bypasses YF Rate Limits
+            time.sleep(0.75) # Pacer buffed for extra rate limit protection
             
     if selected_tickers:
         status_text.text("✅ Data Extraction Complete.")
@@ -495,8 +535,7 @@ with tab_deepdive:
     
     if deep_ticker:
         try:
-            t_dd = yf.Ticker(deep_ticker)
-            hist_dd = t_dd.history(period="1y") 
+            hist_dd = fetch_cached_history(deep_ticker)
             
             if len(hist_dd) < 50:
                 st.warning("Not enough trading history to generate a robust analysis.")
@@ -509,7 +548,7 @@ with tab_deepdive:
                 adx_14_dd = calculate_adx(hist_6mo)
                 poc_dd, sup1_dd, sup2_dd, res1_dd, res2_dd = calculate_volume_nodes(hist_6mo, dd_price)
 
-                info_dd = t_dd.info
+                info_dd = fetch_cached_info(deep_ticker)
                 short_pct = info_dd.get('shortPercentOfFloat', 0)
                 inst_pct = info_dd.get('heldPercentInstitutions', 0)
                 target_price = info_dd.get('targetMeanPrice')
@@ -530,15 +569,15 @@ with tab_deepdive:
                 oi_fig = None
                 
                 try:
-                    dd_dates = t_dd.options
+                    dd_dates = fetch_cached_options_dates(deep_ticker)
                     if dd_dates:
-                        dd_chain = t_dd.option_chain(dd_dates[0])
-                        total_vol = dd_chain.calls['volume'].fillna(0).sum() + dd_chain.puts['volume'].fillna(0).sum()
-                        avg_vol = total_vol / (len(dd_chain.calls) + len(dd_chain.puts))
+                        calls, puts = fetch_cached_option_chain(deep_ticker, dd_dates[0])
+                        total_vol = calls['volume'].fillna(0).sum() + puts['volume'].fillna(0).sum()
+                        avg_vol = total_vol / (len(calls) + len(puts)) if (len(calls) + len(puts)) > 0 else 0
+                        
                         if avg_vol > 300: liq_status, liq_text = "🌊 **A+ Liquidity:**", "Highly liquid options chain. Minimal slippage expected."
                         elif avg_vol < 50: liq_status, liq_text = "🧊 **Poor Liquidity:**", "Low volume. Expect massive slippage."
                         
-                        calls, puts = dd_chain.calls, dd_chain.puts
                         otm_call = calls[calls['strike'] >= dd_price * 1.1]
                         otm_put = puts[puts['strike'] <= dd_price * 0.9]
                         
@@ -659,8 +698,7 @@ with tab_ai:
                         context_str = "CURRENT QUANTITATIVE MARKET DATA:\n"
                         for sym in ai_tickers:
                             try:
-                                t_ai = yf.Ticker(sym)
-                                hist_ai = t_ai.history(period="1y")
+                                hist_ai = fetch_cached_history(sym)
                                 if len(hist_ai) < 50: 
                                     continue
                                 price = hist_ai['Close'].iloc[-1]
@@ -672,15 +710,19 @@ with tab_ai:
                                 
                                 atm_iv = 0.3
                                 try:
-                                    calls = t_ai.option_chain(t_ai.options[0]).calls
-                                    atm_iv = calls.iloc[(calls['strike'] - price).abs().argsort()[:1]]['impliedVolatility'].values[0]
+                                    ai_dates = fetch_cached_options_dates(sym)
+                                    if ai_dates:
+                                        calls, puts = fetch_cached_option_chain(sym, ai_dates[0])
+                                        if not calls.empty:
+                                            atm_iv = calls.iloc[(calls['strike'] - price).abs().argsort()[:1]]['impliedVolatility'].values[0]
                                 except: 
                                     pass
                                 
                                 ivr = calculate_ivr(hist_ai, atm_iv)
                                 ivr_str = f"{ivr:.1f}" if isinstance(ivr, (int, float)) else "N/A"
                                 
-                                short_pct = t_ai.info.get('shortPercentOfFloat', 0) * 100
+                                info_ai = fetch_cached_info(sym)
+                                short_pct = info_ai.get('shortPercentOfFloat', 0) * 100
                                 
                                 context_str += f"\n--- {sym} ---\n"
                                 context_str += f"Price: ${price:.2f}\n"
@@ -694,7 +736,7 @@ with tab_ai:
                             except Exception as data_err:
                                 context_str += f"\n--- {sym} ---\nCould not fetch data: {str(data_err)}\n"
                             
-                            time.sleep(0.5) # AI Tab Anti-Rate-Limit Pacer
+                            time.sleep(0.75) # AI Tab Anti-Rate-Limit Pacer
                                 
                         final_prompt = (
                             "System: You are an expert quantitative options trader and volatility analyst, familiar with Tastytrade mechanics. "
