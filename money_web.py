@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 import urllib.request
 import json
 import time
+import requests
 
 try:
     import google.generativeai as genai
@@ -124,6 +125,16 @@ def calculate_volume_nodes(hist, current_price, bins=30):
         return "N/A", "N/A", "N/A", "N/A", "N/A"
 # --- END OF PART 1 ---
 # --- START OF PART 2 ---
+
+# --- YFINANCE SESSION FIX (API BLOCK BYPASS) ---
+# Masks the Python requests to look like a standard Google Chrome browser
+yf_session = requests.Session()
+yf_session.headers.update({
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5"
+})
+
 @st.cache_data(ttl=86400)  
 def get_pure_fridays(weeks=26):
     """Mathematically generates the next N Fridays regardless of holidays."""
@@ -139,30 +150,30 @@ def get_pure_fridays(weeks=26):
 # --- YFINANCE CACHED HELPERS (RATE LIMIT PROTECTION) ---
 @st.cache_data(ttl=900)
 def fetch_cached_history(symbol, period="1y"):
-    try: return yf.Ticker(symbol).history(period=period)
+    try: return yf.Ticker(symbol, session=yf_session).history(period=period)
     except: return pd.DataFrame()
 
 @st.cache_data(ttl=900)
 def fetch_cached_options_dates(symbol):
-    try: return yf.Ticker(symbol).options
+    try: return yf.Ticker(symbol, session=yf_session).options
     except: return ()
 
 @st.cache_data(ttl=900)
 def fetch_cached_option_chain(symbol, date_str):
     try:
-        chain = yf.Ticker(symbol).option_chain(date_str)
+        chain = yf.Ticker(symbol, session=yf_session).option_chain(date_str)
         return chain.calls, chain.puts
     except: return pd.DataFrame(), pd.DataFrame()
 
 @st.cache_data(ttl=3600)
 def fetch_cached_info(symbol):
-    try: return yf.Ticker(symbol).info
+    try: return yf.Ticker(symbol, session=yf_session).info
     except: return {}
 
 @st.cache_data(ttl=3600)
 def fetch_cached_calendar(symbol):
     try:
-        cal = yf.Ticker(symbol).calendar
+        cal = yf.Ticker(symbol, session=yf_session).calendar
         if isinstance(cal, pd.DataFrame): return cal.to_dict()
         if isinstance(cal, dict): return cal
         return {}
@@ -172,7 +183,7 @@ def fetch_cached_calendar(symbol):
 def run_radar_scan(ticker_list, threshold):
     found_targets = []
     try:
-        bulk_data = yf.download(ticker_list, period="1mo", group_by='ticker', progress=False)
+        bulk_data = yf.download(ticker_list, period="1mo", group_by='ticker', progress=False, session=yf_session)
         for sym in ticker_list:
             try:
                 if len(ticker_list) > 1:
@@ -200,12 +211,7 @@ def fetch_macro_data():
     fg_val, fg_rating = "N/A", "N/A"
     try:
         url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
-            'Accept': 'application/json',
-            'Referer': 'https://edition.cnn.com/'
-        }
-        req = urllib.request.Request(url, headers=headers)
+        req = urllib.request.Request(url, headers=yf_session.headers)
         with urllib.request.urlopen(req, timeout=5) as response:
             data = json.loads(response.read().decode())
             fg_val = round(data['fear_and_greed']['score'])
@@ -325,7 +331,7 @@ with st.expander("📖 Terminal Indicator Glossary (Quick Reference)", expanded=
         st.write("**🟢 Resistance Walls:** Structural ceiling where sellers emerge.")
         st.write("**Delta Target:** The target probability used to calculate your premium strikes.")
     with g3:
-        st.subheader("⚖️ Risk Underwriting")
+        st.subheader("⚖️ Risk Under underwriting")
         st.write("**Max Pain:** The strike where options sellers lose the least. Acts as a Friday price magnet.")
         st.write("**P/C OI Ratio:** Put vs Call Open Interest. > 1.2 is Bearish flow, < 0.8 is Bullish flow.")
         st.write("**Ex-Dividend:** The cutoff date to own the stock for a dividend. High risk for short calls.")
@@ -333,7 +339,7 @@ with st.expander("📖 Terminal Indicator Glossary (Quick Reference)", expanded=
 if len(selected_tickers) > 1:
     with st.expander("🧩 Portfolio Risk: 30-Day Correlation Matrix", expanded=False):
         try:
-            bench_data = yf.download(selected_tickers, period="3mo", progress=False)['Close']
+            bench_data = yf.download(selected_tickers, period="3mo", progress=False, session=yf_session)['Close']
             returns = bench_data.pct_change().tail(30)
             corr_matrix = returns.corr()
             st.dataframe(corr_matrix.style.background_gradient(cmap='coolwarm', axis=None).format("{:.2f}"))
@@ -518,7 +524,7 @@ with tab_scanner:
             
         if selected_tickers:
             progress_bar.progress((idx + 1) / len(selected_tickers))
-            time.sleep(0.75) # Pacer buffed for extra rate limit protection
+            time.sleep(0.75) 
             
     if selected_tickers:
         status_text.text("✅ Data Extraction Complete.")
