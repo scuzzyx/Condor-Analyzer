@@ -19,10 +19,14 @@ except ImportError:
 st.set_page_config(page_title="Aegis Option Scanner", layout="wide", initial_sidebar_state="expanded")
 st.markdown("<h2 style='font-size: 2.2rem; margin-bottom: 0rem;'>🛡️ Aegis Option Scanner | Volatility & Directional Edge</h2>", unsafe_allow_html=True)
 
-# --- PROBABILITY Z-SCORES ---
-Z_SCORES = {
-    "70%": 1.04, "75%": 1.15, "80%": 1.28, 
-    "85%": 1.44, "90%": 1.645, "95%": 1.96
+# --- DELTA TARGETS (Z-Score Equivalents) ---
+DELTAS = {
+    "30 Delta (Aggressive)": 0.52, 
+    "25 Delta": 0.67, 
+    "20 Delta": 0.84, 
+    "16 Delta (1 SD)": 1.00, 
+    "10 Delta (Conservative)": 1.28, 
+    "5 Delta (Ultra Safe)": 1.645
 }
 
 def load_url_bench():
@@ -251,8 +255,8 @@ selected_date = datetime.strptime(selected_date_str, '%Y-%m-%d')
 dte = (selected_date - datetime.now()).days
 if dte < 0: dte = 0
 
-prob_target = st.sidebar.selectbox("Probability Target:", options=list(Z_SCORES.keys()), index=4)
-z_score = Z_SCORES[prob_target]
+delta_target = st.sidebar.selectbox("Target Option Delta:", options=list(DELTAS.keys()), index=3)
+z_score = DELTAS[delta_target]
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📡 Range-Bound Radar")
@@ -287,7 +291,7 @@ with st.expander("📖 Terminal Indicator Glossary (Quick Reference)", expanded=
         st.write("**POC:** Highest volume price point in 90 days. Price magnet.")
         st.write("**🔴 Support Walls:** Structural floor where buyers step in.")
         st.write("**🟢 Resistance Walls:** Structural ceiling where sellers emerge.")
-        st.write("**Z-Score:** Probability math used to set the strike safety margin.")
+        st.write("**Delta Target:** The target probability used to calculate your premium strikes.")
     with g3:
         st.subheader("⚖️ Risk Underwriting")
         st.write("**Max Pain:** The strike where options sellers lose the least. Acts as a Friday price magnet.")
