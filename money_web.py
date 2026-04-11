@@ -134,6 +134,29 @@ def get_pure_fridays(weeks=26):
     next_friday = today + timedelta(days=days_until_friday)
     return [(next_friday + timedelta(weeks=i)).strftime('%Y-%m-%d') for i in range(weeks)]
 
+@st.cache_data(ttl=3600)
+def run_premium_hunter(ticker_list):
+    """Scans the liquid 50 for the highest Volatility Rank (Premium Sellers Market)"""
+    targets = []
+    try:
+        bulk_data = yf.download(ticker_list, period="1y", progress=False)['Close']
+        for sym in ticker_list:
+            try:
+                hist = bulk_data[sym].dropna()
+                if len(hist) < 50: continue
+                returns = hist.pct_change().dropna()
+                hv_series = returns.rolling(20).std() * np.sqrt(252)
+                curr_hv = hv_series.iloc[-1]
+                hv_min, hv_max = hv_series.min(), hv_series.max()
+                if hv_max > hv_min:
+                    hv_rank = ((curr_hv - hv_min) / (hv_max - hv_min)) * 100
+                    if hv_rank > 60: # Only alert if IV Rank is historically elevated
+                        targets.append((sym, hv_rank))
+            except: continue
+        targets.sort(key=lambda x: x[1], reverse=True)
+        return [f"{t[0]} (Rank: {t[1]:.0f})" for t in targets[:6]]
+    except: return []
+
 @st.cache_data(ttl=900)
 def fetch_macro_data():
     vix_val, vix_pct, fg_val, fg_rating = "N/A", "N/A", "N/A", "N/A"
@@ -159,7 +182,7 @@ def fetch_macro_data():
     return vix_val, vix_pct, fg_val, fg_rating
 
 def custom_metric_box(label, value, sub_value, val_color="#FAFAFA", sub_color="#a6a6a6"):
-    return f"""<div style="line-height: 1.4; margin-bottom: 14px;"><span style="font-size: 0.85rem; color: #a6a6a6; font-family: sans-serif;">{label}</span><br><span style="font-size: 1.8rem; font-weight: 600; color: {val_color}; font-family: sans-serif;">{value}</span><br><span style="font-size: 0.9rem; font-weight: 500; color: {sub_color}; font-family: sans-serif;">{sub_value}</span></div>"""
+    return f'<div style="line-height: 1.4; margin-bottom: 14px;"><span style="font-size: 0.85rem; color: #a6a6a6; font-family: sans-serif;">{label}</span><br><span style="font-size: 1.8rem; font-weight: 600; color: {val_color}; font-family: sans-serif;">{value}</span><br><span style="font-size: 0.9rem; font-weight: 500; color: {sub_color}; font-family: sans-serif;">{sub_value}</span></div>'
 
 st.sidebar.header("🛠️ Dashboard Controls")
 gemini_api_key = st.secrets["GEMINI_API_KEY"] if "GEMINI_API_KEY" in st.secrets else st.sidebar.text_input("🔑 Gemini API Key", type="password")
@@ -214,6 +237,20 @@ target_delta = st.sidebar.select_slider(
     help="Determines probability and premium. 0.15 Delta is roughly an 85% probability of profit."
 )
 
+st.sidebar.markdown("---")
+st.sidebar.subheader("🔥 Premium Hunter Scanner")
+st.sidebar.caption("Scans the Top 50 Liquid Stocks for high Volatility Rank (>60).")
+LIQUID_50 = ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA', 'AMD', 'PLTR', 'NFLX', 'BA', 'DIS', 'BABA', 'UBER', 'COIN', 'HOOD', 'INTC', 'MU', 'AVGO', 'TSM', 'JPM', 'BAC', 'C', 'V', 'MA', 'PYPL', 'SQ', 'WMT', 'TGT', 'COST', 'HD', 'SBUX', 'NKE', 'MCD', 'XOM', 'CVX', 'CAT', 'GE', 'JNJ', 'PFE', 'UNH', 'LLY', 'CMCSA', 'VZ', 'T', 'QCOM', 'CRM', 'SNOW', 'SHOP', 'SPOT']
+
+if st.sidebar.button("Scan for High Premium"):
+    with st.spinner("Analyzing Liquid 50..."):
+        targets = run_premium_hunter(LIQUID_50)
+        if targets: 
+            st.sidebar.success("🎯 High Volatility Targets:")
+            for t in targets: st.sidebar.write(f"- **{t}**")
+        else: 
+            st.sidebar.warning("Volatility is dead. No elevated IV environments found.")
+
 st.markdown("---")
 with st.expander("📖 Terminal Indicator Glossary (Quick Reference)", expanded=False):
     st.subheader("🚦 Title Risk & Veto Signals")
@@ -251,7 +288,6 @@ if len(selected_tickers) > 1:
             st.dataframe(bench_data.pct_change().tail(30).corr().style.background_gradient(cmap='coolwarm', axis=None).format("{:.2f}"))
         except: st.write("Not enough data.")
 
-st.markdown("---")
 tab_scanner, tab_deepdive, tab_ai = st.tabs(["🛡️ Option Scanner", "🔬 Technical Deep Dive", "🧠 AI Quant Co-Pilot"])
 # --- END OF PART 3 ---
 # --- START OF PART 4 ---
