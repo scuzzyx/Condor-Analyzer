@@ -10,6 +10,7 @@ import urllib.request
 import json
 import time
 import requests
+from requests.adapters import HTTPAdapter
 import random
 
 try:
@@ -22,27 +23,34 @@ except ImportError:
 st.set_page_config(page_title="Aegis Option Scanner", layout="wide", initial_sidebar_state="expanded")
 st.markdown("<h2 style='font-size: 2.2rem; margin-bottom: 0rem;'>🛡️ Aegis Option Scanner | Delta-Based Underwriting</h2>", unsafe_allow_html=True)
 
+# --- CIRCUIT BREAKER ADAPTER ---
+class TimeoutHTTPAdapter(HTTPAdapter):
+    def __init__(self, *args, **kwargs):
+        self.timeout = kwargs.pop('timeout', 5)
+        super().__init__(*args, **kwargs)
+
+    def send(self, request, **kwargs):
+        kwargs['timeout'] = kwargs.get('timeout', self.timeout)
+        return super().send(request, **kwargs)
+
 # --- BROWSER SPOOFING SESSION ---
 def get_yf_session():
-    """Generates a rotating spoofed session to bypass Yahoo Finance 403 blocks."""
+    """Generates a rotating spoofed session with a strict 5-second circuit breaker."""
     session = requests.Session()
+    adapter = TimeoutHTTPAdapter(timeout=5)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    
     uas = [
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0"
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
     ]
     session.headers.update({
         "User-Agent": random.choice(uas),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.5",
-        "Accept-Encoding": "gzip, deflate, br",
         "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-        "Sec-Fetch-User": "?1",
-        "Cache-Control": "max-age=0"
+        "Upgrade-Insecure-Requests": "1"
     })
     return session
 
@@ -59,7 +67,6 @@ def get_cached_options(symbol, target_date):
         valid_dates = t.options
         if not valid_dates: return None, None, None
         
-        # Snap to closest date if holiday/weekend
         if target_date not in valid_dates:
             target_dt = datetime.strptime(target_date, '%Y-%m-%d')
             valid_dts = [datetime.strptime(d, '%Y-%m-%d') for d in valid_dates]
