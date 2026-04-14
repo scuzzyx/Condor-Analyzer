@@ -21,16 +21,35 @@ except ImportError:
 st.set_page_config(page_title="Aegis Option Scanner", layout="wide", initial_sidebar_state="expanded")
 st.markdown("<h2 style='font-size: 2.2rem; margin-bottom: 0rem;'>🛡️ Aegis Option Scanner | Delta-Based Underwriting</h2>", unsafe_allow_html=True)
 
-# --- THE AEGIS DIRECT SCRAPER ---
-# Bypasses the yfinance library deadlocks by hitting Yahoo's backend directly with strict C-level timeouts.
+# --- THE AEGIS DIRECT SCRAPER w/ CRUMB ENGINE ---
 class AegisScraper:
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"}
-    
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Connection": "keep-alive"
+    })
+    crumb = None
+
+    @classmethod
+    def _get_crumb(cls):
+        if cls.crumb: return cls.crumb
+        try:
+            # 1. Ping fc.yahoo.com to set session cookies
+            cls.session.get('https://fc.yahoo.com', timeout=4)
+            # 2. Exchange cookies for cryptographic crumb
+            res = cls.session.get('https://query1.finance.yahoo.com/v1/test/getcrumb', timeout=4)
+            if res.status_code == 200:
+                cls.crumb = res.text.strip()
+        except: pass
+        return cls.crumb
+
     @classmethod
     def history(cls, symbol, period="1y"):
         try:
             url = f"https://query2.finance.yahoo.com/v8/finance/chart/{symbol}?range={period}&interval=1d"
-            res = requests.get(url, headers=cls.headers, timeout=3)
+            res = cls.session.get(url, timeout=4)
             if res.status_code != 200: return pd.DataFrame()
             data = res.json()['chart']['result'][0]
             df = pd.DataFrame(data['indicators']['quote'][0])
@@ -41,10 +60,17 @@ class AegisScraper:
     @classmethod
     def options(cls, symbol, target_date):
         try:
+            crumb = cls._get_crumb()
             url = f"https://query2.finance.yahoo.com/v7/finance/options/{symbol}"
-            res = requests.get(url, headers=cls.headers, timeout=3)
-            data = res.json()['optionChain']['result'][0]
-            valid_timestamps = data.get('expirationDates', [])
+            if crumb: url += f"?crumb={crumb}"
+            
+            res = cls.session.get(url, timeout=5)
+            if res.status_code != 200: return None, None, None
+            
+            data = res.json().get('optionChain', {}).get('result', [])
+            if not data: return None, None, None
+            
+            valid_timestamps = data[0].get('expirationDates', [])
             if not valid_timestamps: return None, None, None
             
             target_ts = int(datetime.strptime(target_date, '%Y-%m-%d').timestamp())
@@ -52,13 +78,26 @@ class AegisScraper:
             active_date = datetime.fromtimestamp(closest_ts).strftime('%Y-%m-%d')
             
             url_chain = f"https://query2.finance.yahoo.com/v7/finance/options/{symbol}?date={closest_ts}"
-            res_chain = requests.get(url_chain, headers=cls.headers, timeout=3)
+            if crumb: url_chain += f"&crumb={crumb}"
+            
+            res_chain = cls.session.get(url_chain, timeout=5)
+            if res_chain.status_code != 200: return None, None, None
+            
             opts = res_chain.json()['optionChain']['result'][0]['options'][0]
             
-            calls, puts = pd.DataFrame(opts.get('calls', [])), pd.DataFrame(opts.get('puts', []))
-            if not calls.empty and 'openInterest' not in calls.columns: calls['openInterest'] = 0
-            if not puts.empty and 'openInterest' not in puts.columns: puts['openInterest'] = 0
-            if not calls.empty and 'impliedVolatility' not in calls.columns: calls['impliedVolatility'] = 0.3
+            calls = pd.DataFrame(opts.get('calls', []))
+            puts = pd.DataFrame(opts.get('puts', []))
+            
+            # Sanitize columns for the UI engine
+            if not calls.empty:
+                calls['strike'] = pd.to_numeric(calls.get('strike'))
+                calls['impliedVolatility'] = pd.to_numeric(calls.get('impliedVolatility', 0.3))
+                calls['openInterest'] = pd.to_numeric(calls.get('openInterest', 0))
+            if not puts.empty:
+                puts['strike'] = pd.to_numeric(puts.get('strike'))
+                puts['impliedVolatility'] = pd.to_numeric(puts.get('impliedVolatility', 0.3))
+                puts['openInterest'] = pd.to_numeric(puts.get('openInterest', 0))
+                
             return calls, puts, active_date
         except: return None, None, None
 
@@ -66,7 +105,7 @@ class AegisScraper:
     def info_and_calendar(cls, symbol):
         try:
             url = f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}?modules=summaryDetail,defaultKeyStatistics,calendarEvents"
-            res = requests.get(url, headers=cls.headers, timeout=3)
+            res = cls.session.get(url, timeout=4)
             data = res.json()['quoteSummary']['result'][0]
             
             info = {}
@@ -224,7 +263,7 @@ if st.sidebar.button("🧹 Clear System Cache", type="primary"):
     time.sleep(1)
     st.rerun()
 
-gemini_api_key = st.secrets["GEMINI_API_KEY"] if "GEMINI_API_KEY" in st.secrets else st.sidebar.text_input("🔑 Gemini API Key", type="password")
+gemini_api_key = st.secrets.get("GEMINI_API_KEY", st.sidebar.text_input("🔑 Gemini API Key", type="password"))
 
 vix_v, vix_p, fg_v, fg_r = fetch_macro_data()
 st.sidebar.markdown("### 🌍 Macro Sentiment")
