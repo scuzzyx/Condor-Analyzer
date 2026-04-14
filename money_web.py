@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import plotly.graph_objects as go
 from scipy.stats import norm
 import urllib.request
+import urllib.parse
 import json
 import time
 import requests
@@ -29,37 +30,46 @@ def get_cached_history(symbol, period="1y"):
 
 @st.cache_data(ttl=900, show_spinner=False)
 def get_cached_options(symbol, target_date):
-    """Primary: CBOE Public Exchange CDN (Bypasses Yahoo IP Blocks). Fallback: Yahoo Finance."""
-    try:
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        # CBOE routes equities with an underscore (e.g., _AAPL) and indices normally (e.g., SPX)
-        url_eq = f"https://cdn.cboe.com/api/global/delayed_quotes/options/_{symbol}.json"
-        url_idx = f"https://cdn.cboe.com/api/global/delayed_quotes/options/{symbol}.json"
-        
-        res = requests.get(url_eq, headers=headers, timeout=5)
-        if res.status_code != 200:
-            res = requests.get(url_idx, headers=headers, timeout=5)
-            
-        if res.status_code == 200:
-            data = res.json().get('data', {}).get('options', [])
-            if data:
-                df = pd.DataFrame(data)
-                valid_dates = sorted(list(set(df['expiration'].tolist())))
-                if valid_dates:
-                    target_dt = datetime.strptime(target_date, '%Y-%m-%d')
-                    valid_dts = [datetime.strptime(d, '%Y-%m-%d') for d in valid_dates]
-                    snap_date = min(valid_dts, key=lambda d: abs(d - target_dt)).strftime('%Y-%m-%d')
-                    
-                    chain = df[df['expiration'] == snap_date].copy()
-                    chain = chain.rename(columns={'iv': 'impliedVolatility', 'open_interest': 'openInterest'})
-                    chain['impliedVolatility'] = chain['impliedVolatility'].fillna(0.3)
-                    
-                    calls = chain[chain['option_type'] == 'C'].copy()
-                    puts = chain[chain['option_type'] == 'P'].copy()
-                    return calls, puts, snap_date
-    except: pass
+    """Bypasses IP blocks by routing Yahoo API requests through free public CORS scraper networks."""
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    base_url = f"https://query2.finance.yahoo.com/v7/finance/options/{symbol}"
     
-    # Fallback to Yahoo if CBOE fails
+    # 3 Free Public Relay APIs to mask the Streamlit Cloud IP address
+    proxy_services = [
+        lambda url: f"https://api.allorigins.win/raw?url={urllib.parse.quote(url)}",
+        lambda url: f"https://corsproxy.io/?{urllib.parse.quote(url)}",
+        lambda url: f"https://api.codetabs.com/v1/proxy/?quest={url}"
+    ]
+
+    for proxy_builder in proxy_services:
+        try:
+            res = requests.get(proxy_builder(base_url), headers=headers, timeout=6)
+            if res.status_code == 200:
+                data = res.json().get('optionChain', {}).get('result', [])
+                if not data: continue
+
+                valid_timestamps = data[0].get('expirationDates', [])
+                if not valid_timestamps: continue
+
+                target_ts = int(datetime.strptime(target_date, '%Y-%m-%d').timestamp())
+                closest_ts = min(valid_timestamps, key=lambda x: abs(x - target_ts))
+                snap_date = datetime.fromtimestamp(closest_ts).strftime('%Y-%m-%d')
+
+                chain_url = f"{base_url}?date={closest_ts}"
+                chain_res = requests.get(proxy_builder(chain_url), headers=headers, timeout=6)
+
+                if chain_res.status_code == 200:
+                    opts = chain_res.json()['optionChain']['result'][0]['options'][0]
+                    calls = pd.DataFrame(opts.get('calls', []))
+                    puts = pd.DataFrame(opts.get('puts', []))
+
+                    if not calls.empty and 'impliedVolatility' not in calls.columns: calls['impliedVolatility'] = 0.3
+                    if not puts.empty and 'impliedVolatility' not in puts.columns: puts['impliedVolatility'] = 0.3
+
+                    return calls, puts, snap_date
+        except: continue
+
+    # Native yfinance Fallback
     try:
         t = yf.Ticker(symbol)
         valid_dates = t.options
@@ -296,7 +306,7 @@ tab_scanner, tab_deepdive, tab_ai = st.tabs(["🛡️ Option Scanner", "🔬 Tec
 # --- START OF PART 4 ---
 with tab_scanner:
     if selected_tickers:
-        st.markdown("##### 📡 Fetching Live Data (CBOE & Yahoo Finance)...")
+        st.markdown("##### 📡 Reading Memory Cache...")
         progress_bar = st.progress(0)
         
     for idx, symbol in enumerate(selected_tickers):
@@ -446,6 +456,7 @@ with tab_deepdive:
                 info_dd = get_cached_info(deep_ticker)
                 short_pct = info_dd.get('shortPercentOfFloat', 0)
                 inst_pct = info_dd.get('heldPercentInstitutions', 0)
+                target_price = info_dd.get('targetMeanPrice')
                 
                 tr = pd.concat([hist_6mo['High']-hist_6mo['Low'], abs(hist_6mo['High']-hist_6mo['Close'].shift(1)), abs(hist_6mo['Low']-hist_6mo['Close'].shift(1))], axis=1).max(axis=1)
                 atr_14 = tr.rolling(14).mean().iloc[-1]
