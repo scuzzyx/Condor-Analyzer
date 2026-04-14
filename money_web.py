@@ -10,6 +10,7 @@ import urllib.request
 import json
 import time
 import requests
+import random
 
 try:
     import google.generativeai as genai
@@ -23,13 +24,25 @@ st.markdown("<h2 style='font-size: 2.2rem; margin-bottom: 0rem;'>🛡️ Aegis O
 
 # --- BROWSER SPOOFING SESSION ---
 def get_yf_session():
-    """Generates a spoofed session to bypass Yahoo Finance 403 blocks."""
+    """Generates a rotating spoofed session to bypass Yahoo Finance 403 blocks."""
     session = requests.Session()
+    uas = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0"
+    ]
     session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "*/*",
+        "User-Agent": random.choice(uas),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
         "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive"
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Cache-Control": "max-age=0"
     })
     return session
 
@@ -79,9 +92,7 @@ def find_delta_strikes(chain_df, S, dte, target_delta, option_type):
         df = chain_df[chain_df['strike'] >= S].copy() if option_type == 'call' else chain_df[chain_df['strike'] <= S].copy()
         if df.empty: return None
         
-        # Sanitize Yahoo's broken IV data to prevent math crashes
         df['impliedVolatility'] = df['impliedVolatility'].replace(0, np.nan).fillna(0.3) 
-        
         df['delta'] = df.apply(lambda x: calculate_delta(S, x['strike'], T, r, x['impliedVolatility'], option_type), axis=1)
         return df.loc[(df['delta'].abs() - target_delta).abs().idxmin(), 'strike']
     except: return None
@@ -149,7 +160,6 @@ def get_pure_fridays(weeks=26):
 
 @st.cache_data(ttl=3600)
 def run_premium_hunter(ticker_list):
-    """Scans the liquid 50 for the highest Volatility Rank (Premium Sellers Market)"""
     targets = []
     try:
         bulk_data = yf.download(ticker_list, period="1y", progress=False, session=get_yf_session())['Close']
@@ -163,7 +173,7 @@ def run_premium_hunter(ticker_list):
                 hv_min, hv_max = hv_series.min(), hv_series.max()
                 if hv_max > hv_min:
                     hv_rank = ((curr_hv - hv_min) / (hv_max - hv_min)) * 100
-                    if hv_rank > 60: # Only alert if IV Rank is historically elevated
+                    if hv_rank > 60:
                         targets.append((sym, hv_rank))
             except: continue
         targets.sort(key=lambda x: x[1], reverse=True)
@@ -180,12 +190,7 @@ def fetch_macro_data():
     except: pass
     try:
         url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-            'Accept': 'application/json',
-            'Origin': 'https://edition.cnn.com',
-            'Referer': 'https://edition.cnn.com/'
-        }
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=5) as response:
             data = json.loads(response.read().decode())
@@ -199,6 +204,14 @@ def custom_metric_box(label, value, sub_value, val_color="#FAFAFA", sub_color="#
 # --- END OF PART 2 ---
 # --- START OF PART 3 ---
 st.sidebar.header("🛠️ Dashboard Controls")
+
+# --- THE NUCLEAR CACHE PURGE ---
+if st.sidebar.button("🧹 Clear System Cache", type="primary"):
+    st.cache_data.clear()
+    st.sidebar.success("Cache Purged! Refreshing Data...")
+    time.sleep(1)
+    st.rerun()
+
 gemini_api_key = st.secrets["GEMINI_API_KEY"] if "GEMINI_API_KEY" in st.secrets else st.sidebar.text_input("🔑 Gemini API Key", type="password")
 
 vix_v, vix_p, fg_v, fg_r = fetch_macro_data()
@@ -242,17 +255,10 @@ else:
 
 dte = max(1, (datetime.strptime(selected_date_str, '%Y-%m-%d') - datetime.now()).days)
 
-# --- DELTA SELECTOR ---
-target_delta = st.sidebar.select_slider(
-    "Target Strike Delta:",
-    options=[0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40],
-    value=0.15,
-    help="Determines probability and premium. 0.15 Delta is roughly an 85% probability of profit."
-)
+target_delta = st.sidebar.select_slider("Target Strike Delta:", options=[0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40], value=0.15)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔥 Premium Hunter Scanner")
-st.sidebar.caption("Scans the Top 50 Liquid Stocks for high Volatility Rank (>60).")
 LIQUID_50 = ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA', 'AMD', 'PLTR', 'NFLX', 'BA', 'DIS', 'BABA', 'UBER', 'COIN', 'HOOD', 'INTC', 'MU', 'AVGO', 'TSM', 'JPM', 'BAC', 'C', 'V', 'MA', 'PYPL', 'SQ', 'WMT', 'TGT', 'COST', 'HD', 'SBUX', 'NKE', 'MCD', 'XOM', 'CVX', 'CAT', 'GE', 'JNJ', 'PFE', 'UNH', 'LLY', 'CMCSA', 'VZ', 'T', 'QCOM', 'CRM', 'SNOW', 'SHOP', 'SPOT']
 
 if st.sidebar.button("Scan for High Premium"):
@@ -276,24 +282,6 @@ with st.expander("📖 Terminal Indicator Glossary (Quick Reference)", expanded=
     st.write("- **🟢 *FLOOR CONFIRMED*:** 8-EMA Reclaimed. Consider Put Spreads only.")
     st.write("- **🟢 *NEUTRAL CHOP*:** Ideal sideways environment for Iron Condors.")
     
-    g1, g2, g3 = st.columns(3)
-    with g1:
-        st.subheader("🛡️ Trend & Momentum")
-        st.write("**8-Day EMA:** The 'Algorithmic Trend' line. Orange dotted line on chart.")
-        st.write("**RSI Stack:** Overbought (>70), Oversold (<30), Neutral (31-69).")
-        st.write("**ADX:** Above 25 = Strong Trend. Below 25 = Drifting/Chop.")
-    with g2:
-        st.subheader("🎯 Structure & Math")
-        st.write("**POC:** Highest volume price point in 90 days. Price magnet.")
-        st.write("**🔴 Support Walls:** Structural floor where buyers step in.")
-        st.write("**🟢 Resistance Walls:** Structural ceiling where sellers emerge.")
-        st.write("**Strike Delta:** Proxy for the chance of the option finishing in-the-money.")
-    with g3:
-        st.subheader("⚖️ Risk Underwriting")
-        st.write("**Max Pain:** The strike where options sellers lose the least. Acts as a Friday price magnet.")
-        st.write("**P/C OI Ratio:** Put vs Call Open Interest. > 1.2 is Bearish flow, < 0.8 is Bullish flow.")
-        st.write("**Ex-Dividend:** The cutoff date to own the stock for a dividend. High risk for short calls.")
-
 if len(selected_tickers) > 1:
     with st.expander("🧩 Portfolio Risk: 30-Day Correlation Matrix", expanded=False):
         try:
@@ -474,7 +462,6 @@ with tab_deepdive:
                 oi_fig = None
                 
                 try:
-                    # Look 30 days out for structure
                     target_dd = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d')
                     calls, puts, _ = get_cached_options(deep_ticker, target_dd)
                     
