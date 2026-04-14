@@ -12,6 +12,7 @@ import time
 import requests
 from requests.adapters import HTTPAdapter
 import random
+import concurrent.futures
 
 try:
     import google.generativeai as genai
@@ -35,12 +36,10 @@ class TimeoutHTTPAdapter(HTTPAdapter):
 
 # --- BROWSER SPOOFING SESSION ---
 def get_yf_session():
-    """Generates a rotating spoofed session with a strict 5-second circuit breaker."""
     session = requests.Session()
     adapter = TimeoutHTTPAdapter(timeout=5)
     session.mount("https://", adapter)
     session.mount("http://", adapter)
-    
     uas = [
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
@@ -54,37 +53,50 @@ def get_yf_session():
     })
     return session
 
-# --- THE STEALTH CACHE (ANTI-API BLOCK ENGINE) ---
+# --- THE QUARANTINED CACHE (ANTI-DEADLOCK ENGINE) ---
 @st.cache_data(ttl=900, show_spinner=False) 
 def get_cached_history(symbol, period="1y"):
-    try: return yf.Ticker(symbol, session=get_yf_session()).history(period=period)
-    except: return pd.DataFrame()
+    def _fetch():
+        return yf.Ticker(symbol, session=get_yf_session()).history(period=period)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        try:
+            res = executor.submit(_fetch).result(timeout=8)
+            return res if not res.empty else pd.DataFrame()
+        except: return pd.DataFrame()
 
 @st.cache_data(ttl=900, show_spinner=False)
 def get_cached_options(symbol, target_date):
-    try:
+    def _fetch():
         t = yf.Ticker(symbol, session=get_yf_session())
         valid_dates = t.options
         if not valid_dates: return None, None, None
         
-        if target_date not in valid_dates:
-            target_dt = datetime.strptime(target_date, '%Y-%m-%d')
+        snap_date = target_date
+        if snap_date not in valid_dates:
+            target_dt = datetime.strptime(snap_date, '%Y-%m-%d')
             valid_dts = [datetime.strptime(d, '%Y-%m-%d') for d in valid_dates]
-            target_date = min(valid_dts, key=lambda d: abs(d - target_dt)).strftime('%Y-%m-%d')
+            snap_date = min(valid_dts, key=lambda d: abs(d - target_dt)).strftime('%Y-%m-%d')
             
-        chain = t.option_chain(target_date)
-        return chain.calls, chain.puts, target_date
-    except: return None, None, None
+        chain = t.option_chain(snap_date)
+        return chain.calls, chain.puts, snap_date
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        try: return executor.submit(_fetch).result(timeout=10)
+        except: return None, None, None
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_cached_info(symbol):
-    try: return yf.Ticker(symbol, session=get_yf_session()).info
-    except: return {}
+    def _fetch(): return yf.Ticker(symbol, session=get_yf_session()).info
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        try: return executor.submit(_fetch).result(timeout=5)
+        except: return {}
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_cached_calendar(symbol):
-    try: return yf.Ticker(symbol, session=get_yf_session()).calendar
-    except: return None
+    def _fetch(): return yf.Ticker(symbol, session=get_yf_session()).calendar
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        try: return executor.submit(_fetch).result(timeout=5)
+        except: return None
 
 # --- BLACK-SCHOLES DELTA ENGINE ---
 def calculate_delta(S, K, T, r, sigma, option_type='call'):
@@ -168,8 +180,14 @@ def get_pure_fridays(weeks=26):
 @st.cache_data(ttl=3600)
 def run_premium_hunter(ticker_list):
     targets = []
+    def _fetch_bulk():
+        return yf.download(ticker_list, period="1y", progress=False, session=get_yf_session())['Close']
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        try: bulk_data = executor.submit(_fetch_bulk).result(timeout=15)
+        except: return []
+
     try:
-        bulk_data = yf.download(ticker_list, period="1y", progress=False, session=get_yf_session())['Close']
         for sym in ticker_list:
             try:
                 hist = bulk_data[sym].dropna()
@@ -180,8 +198,7 @@ def run_premium_hunter(ticker_list):
                 hv_min, hv_max = hv_series.min(), hv_series.max()
                 if hv_max > hv_min:
                     hv_rank = ((curr_hv - hv_min) / (hv_max - hv_min)) * 100
-                    if hv_rank > 60:
-                        targets.append((sym, hv_rank))
+                    if hv_rank > 60: targets.append((sym, hv_rank))
             except: continue
         targets.sort(key=lambda x: x[1], reverse=True)
         return [f"{t[0]} (Rank: {t[1]:.0f})" for t in targets[:6]]
