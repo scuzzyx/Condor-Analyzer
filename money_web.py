@@ -22,6 +22,22 @@ except ImportError:
 st.set_page_config(page_title="Aegis Option Scanner", layout="wide", initial_sidebar_state="expanded")
 st.markdown("<h2 style='font-size: 2.2rem; margin-bottom: 0rem;'>🛡️ Aegis Option Scanner | Delta-Based Underwriting</h2>", unsafe_allow_html=True)
 
+# --- THE PUBLIC RELAY ENGINE (IP BLOCK BYPASS) ---
+def fetch_yahoo_json(url):
+    """Routes Yahoo API requests through free public CORS scraper networks."""
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    proxy_services = [
+        lambda u: f"https://api.allorigins.win/raw?url={urllib.parse.quote(u)}",
+        lambda u: f"https://corsproxy.io/?{urllib.parse.quote(u)}",
+        lambda u: f"https://api.codetabs.com/v1/proxy/?quest={u}"
+    ]
+    for proxy_builder in proxy_services:
+        try:
+            res = requests.get(proxy_builder(url), headers=headers, timeout=6)
+            if res.status_code == 200: return res.json()
+        except: continue
+    return None
+
 # --- CACHE ENGINES ---
 @st.cache_data(ttl=900, show_spinner=False) 
 def get_cached_history(symbol, period="1y"):
@@ -30,44 +46,32 @@ def get_cached_history(symbol, period="1y"):
 
 @st.cache_data(ttl=900, show_spinner=False)
 def get_cached_options(symbol, target_date):
-    """Bypasses IP blocks by routing Yahoo API requests through free public CORS scraper networks."""
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     base_url = f"https://query2.finance.yahoo.com/v7/finance/options/{symbol}"
+    data = fetch_yahoo_json(base_url)
     
-    # 3 Free Public Relay APIs to mask the Streamlit Cloud IP address
-    proxy_services = [
-        lambda url: f"https://api.allorigins.win/raw?url={urllib.parse.quote(url)}",
-        lambda url: f"https://corsproxy.io/?{urllib.parse.quote(url)}",
-        lambda url: f"https://api.codetabs.com/v1/proxy/?quest={url}"
-    ]
-
-    for proxy_builder in proxy_services:
+    if data:
         try:
-            res = requests.get(proxy_builder(base_url), headers=headers, timeout=6)
-            if res.status_code == 200:
-                data = res.json().get('optionChain', {}).get('result', [])
-                if not data: continue
+            res = data.get('optionChain', {}).get('result', [])
+            if res:
+                valid_timestamps = res[0].get('expirationDates', [])
+                if valid_timestamps:
+                    target_ts = int(datetime.strptime(target_date, '%Y-%m-%d').timestamp())
+                    closest_ts = min(valid_timestamps, key=lambda x: abs(x - target_ts))
+                    snap_date = datetime.fromtimestamp(closest_ts).strftime('%Y-%m-%d')
 
-                valid_timestamps = data[0].get('expirationDates', [])
-                if not valid_timestamps: continue
+                    chain_url = f"{base_url}?date={closest_ts}"
+                    chain_data = fetch_yahoo_json(chain_url)
+                    
+                    if chain_data:
+                        opts = chain_data['optionChain']['result'][0]['options'][0]
+                        calls = pd.DataFrame(opts.get('calls', []))
+                        puts = pd.DataFrame(opts.get('puts', []))
 
-                target_ts = int(datetime.strptime(target_date, '%Y-%m-%d').timestamp())
-                closest_ts = min(valid_timestamps, key=lambda x: abs(x - target_ts))
-                snap_date = datetime.fromtimestamp(closest_ts).strftime('%Y-%m-%d')
+                        if not calls.empty and 'impliedVolatility' not in calls.columns: calls['impliedVolatility'] = 0.3
+                        if not puts.empty and 'impliedVolatility' not in puts.columns: puts['impliedVolatility'] = 0.3
 
-                chain_url = f"{base_url}?date={closest_ts}"
-                chain_res = requests.get(proxy_builder(chain_url), headers=headers, timeout=6)
-
-                if chain_res.status_code == 200:
-                    opts = chain_res.json()['optionChain']['result'][0]['options'][0]
-                    calls = pd.DataFrame(opts.get('calls', []))
-                    puts = pd.DataFrame(opts.get('puts', []))
-
-                    if not calls.empty and 'impliedVolatility' not in calls.columns: calls['impliedVolatility'] = 0.3
-                    if not puts.empty and 'impliedVolatility' not in puts.columns: puts['impliedVolatility'] = 0.3
-
-                    return calls, puts, snap_date
-        except: continue
+                        return calls, puts, snap_date
+        except: pass
 
     # Native yfinance Fallback
     try:
@@ -85,11 +89,41 @@ def get_cached_options(symbol, target_date):
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_cached_info(symbol):
-    try: return yf.Ticker(symbol).info
-    except: return {}
+    info = {}
+    url = f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}?modules=summaryDetail,defaultKeyStatistics"
+    data = fetch_yahoo_json(url)
+    
+    if data and 'quoteSummary' in data and data['quoteSummary']['result']:
+        res = data['quoteSummary']['result'][0]
+        if 'summaryDetail' in res:
+            detail = res['summaryDetail']
+            if 'exDividendDate' in detail and 'raw' in detail['exDividendDate']:
+                info['exDividendDate'] = detail['exDividendDate']['raw']
+        if 'defaultKeyStatistics' in res:
+            stats = res['defaultKeyStatistics']
+            if 'shortPercentOfFloat' in stats and 'raw' in stats['shortPercentOfFloat']:
+                info['shortPercentOfFloat'] = stats['shortPercentOfFloat']['raw']
+                
+    if not info:
+        try: info = yf.Ticker(symbol).info
+        except: pass
+    return info
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_cached_calendar(symbol):
+    url = f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}?modules=calendarEvents"
+    data = fetch_yahoo_json(url)
+    
+    if data and 'quoteSummary' in data and data['quoteSummary']['result']:
+        res = data['quoteSummary']['result'][0]
+        if 'calendarEvents' in res and 'earnings' in res['calendarEvents']:
+            earnings = res['calendarEvents']['earnings']
+            if 'earningsDate' in earnings and len(earnings['earningsDate']) > 0:
+                timestamp = earnings['earningsDate'][0].get('raw')
+                if timestamp:
+                    dt_str = datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d')
+                    return {'Earnings Date': [dt_str]}
+                    
     try: return yf.Ticker(symbol).calendar
     except: return None
 
@@ -196,20 +230,30 @@ def run_premium_hunter(ticker_list):
 @st.cache_data(ttl=900)
 def fetch_macro_data():
     vix_val, vix_pct, fg_val, fg_rating = "N/A", "N/A", "N/A", "N/A"
+    
+    # 1. Fetch VIX (Standard yfinance call)
     try:
         vix_hist = yf.Ticker("^VIX").history(period="5d")
-        vix_val = float(vix_hist['Close'].iloc[-1])
-        vix_pct = float(((vix_val - vix_hist['Close'].iloc[-2]) / vix_hist['Close'].iloc[-2]) * 100)
+        if not vix_hist.empty:
+            vix_val = float(vix_hist['Close'].iloc[-1])
+            vix_pct = float(((vix_val - vix_hist['Close'].iloc[-2]) / vix_hist['Close'].iloc[-2]) * 100)
     except: pass
+    
+    # 2. Fetch Fear & Greed (Spoofed Headers to bypass CNN Cloudflare)
     try:
         url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=5) as response:
-            data = json.loads(response.read().decode())
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept': 'application/json',
+            'Referer': 'https://edition.cnn.com/'
+        }
+        res = requests.get(url, headers=headers, timeout=5)
+        if res.status_code == 200:
+            data = res.json()
             fg_val = round(data['fear_and_greed']['score'])
             fg_rating = data['fear_and_greed']['rating'].title()
     except: pass
+    
     return vix_val, vix_pct, fg_val, fg_rating
 
 def custom_metric_box(label, value, sub_value, val_color="#FAFAFA", sub_color="#a6a6a6"):
