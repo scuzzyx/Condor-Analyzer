@@ -10,7 +10,6 @@ import urllib.request
 import json
 import time
 import requests
-import re
 import concurrent.futures
 
 try:
@@ -23,89 +22,46 @@ except ImportError:
 st.set_page_config(page_title="Aegis Option Scanner", layout="wide", initial_sidebar_state="expanded")
 st.markdown("<h2 style='font-size: 2.2rem; margin-bottom: 0rem;'>🛡️ Aegis Option Scanner | Delta-Based Underwriting</h2>", unsafe_allow_html=True)
 
-# --- THE STEALTH CACHE ---
+def get_yf_session():
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    })
+    return session
+
+# --- THE STEALTH CACHE (ANTI-API BLOCK ENGINE) ---
 @st.cache_data(ttl=900, show_spinner=False) 
 def get_cached_history(symbol, period="1y"):
-    try: return yf.Ticker(symbol).history(period=period)
+    try: return yf.Ticker(symbol, session=get_yf_session()).history(period=period)
     except: return pd.DataFrame()
 
 @st.cache_data(ttl=900, show_spinner=False)
 def get_cached_options(symbol, target_date):
-    # STRATEGY 1: Official yfinance API
     try:
-        t = yf.Ticker(symbol)
+        t = yf.Ticker(symbol, session=get_yf_session())
         valid_dates = t.options
-        if valid_dates:
-            target_dt = datetime.strptime(target_date, '%Y-%m-%d')
-            valid_dts = [datetime.strptime(d, '%Y-%m-%d') for d in valid_dates]
-            snap_date = min(valid_dts, key=lambda d: abs(d - target_dt)).strftime('%Y-%m-%d')
-            chain = t.option_chain(snap_date)
-            if not chain.calls.empty: return chain.calls, chain.puts, snap_date
-    except: pass
         
-    # STRATEGY 2: The Crumb-Bypass HTML Scraper (If API is IP-Blocked)
-    try:
-        url = f"https://finance.yahoo.com/quote/{symbol}/options"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"}
-        res = requests.get(url, headers=headers, timeout=8)
-        
-        # Scrape unix timestamps from HTML source to find valid expirations
-        timestamps = [int(ts) for ts in re.findall(r'(\d{10})', res.text) if ts.startswith('17') and len(ts)==10]
-        timestamps = sorted(list(set(timestamps)))
-        
-        target_ts = int(datetime.strptime(target_date, '%Y-%m-%d').timestamp())
-        
-        if timestamps:
-            closest_ts = min(timestamps, key=lambda x: abs(x - target_ts))
-            active_date = datetime.fromtimestamp(closest_ts).strftime('%Y-%m-%d')
-            if closest_ts != timestamps[0]: # Target specific date if not default
-                url = f"https://finance.yahoo.com/quote/{symbol}/options?date={closest_ts}"
-                res = requests.get(url, headers=headers, timeout=8)
-        else:
-            active_date = target_date
+        if not valid_dates: 
+            return None, None, "API_BLOCKED"
             
-        dfs = pd.read_html(res.text)
-        if len(dfs) >= 2:
-            # Yahoo frontend lists Calls as Table 0, Puts as Table 1
-            calls, puts = dfs[0], dfs[1]
+        # Snap to closest date if holiday/weekend
+        target_dt = datetime.strptime(target_date, '%Y-%m-%d')
+        valid_dts = [datetime.strptime(d, '%Y-%m-%d') for d in valid_dates]
+        snap_date = min(valid_dts, key=lambda d: abs(d - target_dt)).strftime('%Y-%m-%d')
             
-            def clean_df(df):
-                df.columns = [c.lower() for c in df.columns]
-                rename_map = {}
-                for col in df.columns:
-                    if 'strike' in col: rename_map[col] = 'strike'
-                    elif 'implied volatility' in col or 'volatility' in col: rename_map[col] = 'impliedVolatility'
-                    elif 'open interest' in col: rename_map[col] = 'openInterest'
-                df = df.rename(columns=rename_map)
-                
-                if 'impliedVolatility' in df.columns:
-                    df['impliedVolatility'] = df['impliedVolatility'].astype(str).str.replace('%', '').str.replace(',', '')
-                    df['impliedVolatility'] = pd.to_numeric(df['impliedVolatility'], errors='coerce') / 100.0
-                else: df['impliedVolatility'] = 0.3
-                    
-                if 'openInterest' in df.columns:
-                    df['openInterest'] = df['openInterest'].astype(str).str.replace('-', '0').str.replace(',', '')
-                    df['openInterest'] = pd.to_numeric(df['openInterest'], errors='coerce').fillna(0)
-                else: df['openInterest'] = 0
-                    
-                if 'strike' in df.columns:
-                    df['strike'] = pd.to_numeric(df['strike'].astype(str).str.replace(',', ''), errors='coerce')
-                    
-                return df
-                
-            return clean_df(calls), clean_df(puts), active_date
-    except: pass
-    
-    return None, None, None
+        chain = t.option_chain(snap_date)
+        return chain.calls, chain.puts, snap_date
+    except Exception as e: 
+        return None, None, f"ERROR: {str(e)}"
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_cached_info(symbol):
-    try: return yf.Ticker(symbol).info
+    try: return yf.Ticker(symbol, session=get_yf_session()).info
     except: return {}
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_cached_calendar(symbol):
-    try: return yf.Ticker(symbol).calendar
+    try: return yf.Ticker(symbol, session=get_yf_session()).calendar
     except: return None
 
 # --- BLACK-SCHOLES DELTA ENGINE ---
@@ -120,6 +76,7 @@ def find_delta_strikes(chain_df, S, dte, target_delta, option_type):
         r = 0.04
         df = chain_df[chain_df['strike'] >= S].copy() if option_type == 'call' else chain_df[chain_df['strike'] <= S].copy()
         if df.empty: return None
+        
         df['impliedVolatility'] = df['impliedVolatility'].replace(0, np.nan).fillna(0.3) 
         df['delta'] = df.apply(lambda x: calculate_delta(S, x['strike'], T, r, x['impliedVolatility'], option_type), axis=1)
         return df.loc[(df['delta'].abs() - target_delta).abs().idxmin(), 'strike']
@@ -190,7 +147,7 @@ def get_pure_fridays(weeks=26):
 def run_premium_hunter(ticker_list):
     targets = []
     try:
-        bulk_data = yf.download(ticker_list, period="1y", progress=False)['Close']
+        bulk_data = yf.download(ticker_list, period="1y", progress=False, session=get_yf_session())['Close']
         for sym in ticker_list:
             try:
                 hist = bulk_data[sym].dropna()
@@ -201,7 +158,8 @@ def run_premium_hunter(ticker_list):
                 hv_min, hv_max = hv_series.min(), hv_series.max()
                 if hv_max > hv_min:
                     hv_rank = ((curr_hv - hv_min) / (hv_max - hv_min)) * 100
-                    if hv_rank > 60: targets.append((sym, hv_rank))
+                    if hv_rank > 60:
+                        targets.append((sym, hv_rank))
             except: continue
         targets.sort(key=lambda x: x[1], reverse=True)
         return [f"{t[0]} (Rank: {t[1]:.0f})" for t in targets[:6]]
@@ -211,7 +169,7 @@ def run_premium_hunter(ticker_list):
 def fetch_macro_data():
     vix_val, vix_pct, fg_val, fg_rating = "N/A", "N/A", "N/A", "N/A"
     try:
-        vix_hist = yf.Ticker("^VIX").history(period="5d")
+        vix_hist = yf.Ticker("^VIX", session=get_yf_session()).history(period="5d")
         vix_val = float(vix_hist['Close'].iloc[-1])
         vix_pct = float(((vix_val - vix_hist['Close'].iloc[-2]) / vix_hist['Close'].iloc[-2]) * 100)
     except: pass
@@ -238,7 +196,7 @@ if st.sidebar.button("🧹 Clear System Cache", type="primary"):
     time.sleep(1)
     st.rerun()
 
-gemini_api_key = st.secrets.get("GEMINI_API_KEY", st.sidebar.text_input("🔑 Gemini API Key", type="password"))
+gemini_api_key = st.secrets["GEMINI_API_KEY"] if "GEMINI_API_KEY" in st.secrets else st.sidebar.text_input("🔑 Gemini API Key", type="password")
 
 vix_v, vix_p, fg_v, fg_r = fetch_macro_data()
 st.sidebar.markdown("### 🌍 Macro Sentiment")
@@ -311,7 +269,7 @@ with st.expander("📖 Terminal Indicator Glossary (Quick Reference)", expanded=
 if len(selected_tickers) > 1:
     with st.expander("🧩 Portfolio Risk: 30-Day Correlation Matrix", expanded=False):
         try:
-            bench_data = yf.download(selected_tickers, period="3mo", progress=False)['Close']
+            bench_data = yf.download(selected_tickers, period="3mo", progress=False, session=get_yf_session())['Close']
             st.dataframe(bench_data.pct_change().tail(30).corr().style.background_gradient(cmap='coolwarm', axis=None).format("{:.2f}"))
         except: st.write("Not enough data.")
 
@@ -348,9 +306,19 @@ with tab_scanner:
             put_strike, call_strike, put_trip, call_trip = None, None, "N/A", "N/A"
             
             calls, puts, active_date = get_cached_options(symbol, selected_date_str)
-            target_date = active_date if active_date else selected_date_str
             
-            if calls is not None and puts is not None:
+            # --- DIAGNOSTIC ENGINE ---
+            api_error = None
+            if active_date == "API_BLOCKED":
+                api_error = "🚨 **CRITICAL: Yahoo API Blocked.** Streamlit IP is blacklisted. You MUST update `requirements.txt` to `yfinance>=0.2.38` and reboot the app to enable the C-level Cloudflare bypass."
+                target_date = selected_date_str
+            elif str(active_date).startswith("ERROR"):
+                api_error = f"🚨 **API Connection Error:** {active_date}"
+                target_date = selected_date_str
+            else:
+                target_date = active_date if active_date else selected_date_str
+            
+            if calls is not None and puts is not None and not api_error:
                 if not calls.empty:
                     closest_idx = (calls['strike'] - current_price).abs().idxmin()
                     atm_iv_raw = calls.loc[closest_idx, 'impliedVolatility']
@@ -403,6 +371,9 @@ with tab_scanner:
             ivr_color = "#09ab3b" if (isinstance(ivr, str) and ivr != "N/A" and float(ivr) > 50) else "#a6a6a6"
 
             with st.expander(f"{symbol} | Price: ${current_price:.2f} | Target Chain: {target_date} | Risk: {risk}", expanded=False):
+                if api_error:
+                    st.error(api_error)
+                
                 c1, c2, c3, c4, c5 = st.columns(5)
                 with c1: st.markdown(custom_metric_box("Today's Change", f"${current_price:.2f}", f"{change_dlr:+.2f} ({change_pct:+.2f}%)", sub_color=change_color), unsafe_allow_html=True)
                 with c2: st.markdown(custom_metric_box(f"{int(target_delta*100)}Δ Put", f"${put_strike}" if put_strike else "N/A", f"Trip: {put_trip}", sub_color="#ffcc00"), unsafe_allow_html=True)
