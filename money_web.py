@@ -11,6 +11,7 @@ import urllib.parse
 import json
 import time
 import requests
+import concurrent.futures
 
 try:
     import google.generativeai as genai
@@ -22,20 +23,30 @@ except ImportError:
 st.set_page_config(page_title="Aegis Option Scanner", layout="wide", initial_sidebar_state="expanded")
 st.markdown("<h2 style='font-size: 2.2rem; margin-bottom: 0rem;'>🛡️ Aegis Option Scanner | Delta-Based Underwriting</h2>", unsafe_allow_html=True)
 
-# --- THE PUBLIC RELAY ENGINE (IP BLOCK BYPASS) ---
+# --- THE PUBLIC RELAY RACING ENGINE ---
 def fetch_yahoo_json(url):
-    """Routes Yahoo API requests through free public CORS scraper networks."""
+    """Fires requests to 3 public proxies simultaneously. First to return data wins."""
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     proxy_services = [
         lambda u: f"https://api.allorigins.win/raw?url={urllib.parse.quote(u)}",
         lambda u: f"https://corsproxy.io/?{urllib.parse.quote(u)}",
         lambda u: f"https://api.codetabs.com/v1/proxy/?quest={u}"
     ]
-    for proxy_builder in proxy_services:
+    
+    def _make_req(proxy_builder):
         try:
-            res = requests.get(proxy_builder(url), headers=headers, timeout=6)
+            res = requests.get(proxy_builder(url), headers=headers, timeout=5)
             if res.status_code == 200: return res.json()
-        except: continue
+        except: pass
+        return None
+
+    # Race the proxies against each other on 3 parallel threads
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        futures = [executor.submit(_make_req, pb) for pb in proxy_services]
+        for future in concurrent.futures.as_completed(futures):
+            data = future.result()
+            if data: return data  # Return instantly the moment the fastest proxy succeeds
+            
     return None
 
 # --- CACHE ENGINES ---
