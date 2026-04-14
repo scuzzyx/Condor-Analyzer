@@ -9,6 +9,7 @@ from scipy.stats import norm
 import urllib.request
 import json
 import time
+import requests
 
 try:
     import google.generativeai as genai
@@ -20,16 +21,27 @@ except ImportError:
 st.set_page_config(page_title="Aegis Option Scanner", layout="wide", initial_sidebar_state="expanded")
 st.markdown("<h2 style='font-size: 2.2rem; margin-bottom: 0rem;'>🛡️ Aegis Option Scanner | Delta-Based Underwriting</h2>", unsafe_allow_html=True)
 
-# --- THE STEALTH CACHE (ANTI-API BLOCK ENGINE) ---
+# --- THE PROXY ENGINE ---
+def get_proxy_session(proxy_url=None):
+    """Builds a requests session routed through your Webshare proxy."""
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    })
+    if proxy_url:
+        session.proxies = {"http": proxy_url, "https": proxy_url}
+    return session
+
+# --- THE STEALTH CACHE ---
 @st.cache_data(ttl=900, show_spinner=False) 
-def get_cached_history(symbol, period="1y"):
-    try: return yf.Ticker(symbol).history(period=period)
+def get_cached_history(symbol, period="1y", proxy_url=None):
+    try: return yf.Ticker(symbol, session=get_proxy_session(proxy_url)).history(period=period)
     except: return pd.DataFrame()
 
 @st.cache_data(ttl=900, show_spinner=False)
-def get_cached_options(symbol, target_date):
+def get_cached_options(symbol, target_date, proxy_url=None):
     try:
-        t = yf.Ticker(symbol)
+        t = yf.Ticker(symbol, session=get_proxy_session(proxy_url))
         valid_dates = t.options
         if not valid_dates: return None, None, None
         
@@ -44,13 +56,13 @@ def get_cached_options(symbol, target_date):
     except: return None, None, None
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def get_cached_info(symbol):
-    try: return yf.Ticker(symbol).info
+def get_cached_info(symbol, proxy_url=None):
+    try: return yf.Ticker(symbol, session=get_proxy_session(proxy_url)).info
     except: return {}
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def get_cached_calendar(symbol):
-    try: return yf.Ticker(symbol).calendar
+def get_cached_calendar(symbol, proxy_url=None):
+    try: return yf.Ticker(symbol, session=get_proxy_session(proxy_url)).calendar
     except: return None
 
 # --- BLACK-SCHOLES DELTA ENGINE ---
@@ -135,11 +147,10 @@ def get_pure_fridays(weeks=26):
     return [(next_friday + timedelta(weeks=i)).strftime('%Y-%m-%d') for i in range(weeks)]
 
 @st.cache_data(ttl=3600)
-def run_premium_hunter(ticker_list):
-    """Scans the liquid 50 for the highest Volatility Rank (Premium Sellers Market)"""
+def run_premium_hunter(ticker_list, proxy_url=None):
     targets = []
     try:
-        bulk_data = yf.download(ticker_list, period="1y", progress=False)['Close']
+        bulk_data = yf.download(ticker_list, period="1y", progress=False, session=get_proxy_session(proxy_url))['Close']
         for sym in ticker_list:
             try:
                 hist = bulk_data[sym].dropna()
@@ -150,7 +161,7 @@ def run_premium_hunter(ticker_list):
                 hv_min, hv_max = hv_series.min(), hv_series.max()
                 if hv_max > hv_min:
                     hv_rank = ((curr_hv - hv_min) / (hv_max - hv_min)) * 100
-                    if hv_rank > 60: # Only alert if IV Rank is historically elevated
+                    if hv_rank > 60:
                         targets.append((sym, hv_rank))
             except: continue
         targets.sort(key=lambda x: x[1], reverse=True)
@@ -158,21 +169,16 @@ def run_premium_hunter(ticker_list):
     except: return []
 
 @st.cache_data(ttl=900)
-def fetch_macro_data():
+def fetch_macro_data(proxy_url=None):
     vix_val, vix_pct, fg_val, fg_rating = "N/A", "N/A", "N/A", "N/A"
     try:
-        vix_hist = yf.Ticker("^VIX").history(period="5d")
+        vix_hist = yf.Ticker("^VIX", session=get_proxy_session(proxy_url)).history(period="5d")
         vix_val = float(vix_hist['Close'].iloc[-1])
         vix_pct = float(((vix_val - vix_hist['Close'].iloc[-2]) / vix_hist['Close'].iloc[-2]) * 100)
     except: pass
     try:
         url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'application/json',
-            'Origin': 'https://edition.cnn.com',
-            'Referer': 'https://edition.cnn.com/'
-        }
+        headers = {'User-Agent': 'Mozilla/5.0'}
         req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=5) as response:
             data = json.loads(response.read().decode())
@@ -183,18 +189,29 @@ def fetch_macro_data():
 
 def custom_metric_box(label, value, sub_value, val_color="#FAFAFA", sub_color="#a6a6a6"):
     return f'<div style="line-height: 1.4; margin-bottom: 14px;"><span style="font-size: 0.85rem; color: #a6a6a6; font-family: sans-serif;">{label}</span><br><span style="font-size: 1.8rem; font-weight: 600; color: {val_color}; font-family: sans-serif;">{value}</span><br><span style="font-size: 0.9rem; font-weight: 500; color: {sub_color}; font-family: sans-serif;">{sub_value}</span></div>'
-
+# --- END OF PART 2 ---
+# --- START OF PART 3 ---
 st.sidebar.header("🛠️ Dashboard Controls")
+
+if st.sidebar.button("🧹 Clear System Cache", type="primary"):
+    st.cache_data.clear()
+    st.sidebar.success("Cache Purged!")
+    time.sleep(1)
+    st.rerun()
+
 gemini_api_key = st.secrets["GEMINI_API_KEY"] if "GEMINI_API_KEY" in st.secrets else st.sidebar.text_input("🔑 Gemini API Key", type="password")
 
-vix_v, vix_p, fg_v, fg_r = fetch_macro_data()
+# PROXY INPUT - Passed down to all yfinance functions
+proxy_url_input = st.secrets["PROXY_URL"] if "PROXY_URL" in st.secrets else st.sidebar.text_input("🌐 Webshare Proxy URL", type="password", help="Format: http://username:password@ip:port")
+current_proxy = proxy_url_input if proxy_url_input else None
+
+vix_v, vix_p, fg_v, fg_r = fetch_macro_data(current_proxy)
 st.sidebar.markdown("### 🌍 Macro Sentiment")
 mac1, mac2 = st.sidebar.columns(2)
 with mac1: st.markdown(custom_metric_box("VIX Index", f"{vix_v:.2f}" if isinstance(vix_v, float) else "N/A", f"{vix_p:+.2f}%" if isinstance(vix_p, float) else "", sub_color="#ff4b4b" if (isinstance(vix_p, float) and vix_p > 0) else "#09ab3b"), unsafe_allow_html=True)
 with mac2: st.markdown(custom_metric_box("Fear & Greed", str(fg_v), str(fg_r), val_color="#ffcc00"), unsafe_allow_html=True)
 st.sidebar.markdown("---")
-# --- END OF PART 2 ---
-# --- START OF PART 3 ---
+
 def load_url_bench():
     if "bench" in st.query_params: return st.query_params["bench"].split(",")
     return ["AMZN", "AAPL", "MSFT", "META", "GOOGL", "NVDA", "AMD", "PLTR", "TSLA", "NFLX"]
@@ -229,22 +246,15 @@ else:
 
 dte = max(1, (datetime.strptime(selected_date_str, '%Y-%m-%d') - datetime.now()).days)
 
-# --- DELTA SELECTOR ---
-target_delta = st.sidebar.select_slider(
-    "Target Strike Delta:",
-    options=[0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40],
-    value=0.15,
-    help="Determines probability and premium. 0.15 Delta is roughly an 85% probability of profit."
-)
+target_delta = st.sidebar.select_slider("Target Strike Delta:", options=[0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40], value=0.15)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔥 Premium Hunter Scanner")
-st.sidebar.caption("Scans the Top 50 Liquid Stocks for high Volatility Rank (>60).")
 LIQUID_50 = ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA', 'AMD', 'PLTR', 'NFLX', 'BA', 'DIS', 'BABA', 'UBER', 'COIN', 'HOOD', 'INTC', 'MU', 'AVGO', 'TSM', 'JPM', 'BAC', 'C', 'V', 'MA', 'PYPL', 'SQ', 'WMT', 'TGT', 'COST', 'HD', 'SBUX', 'NKE', 'MCD', 'XOM', 'CVX', 'CAT', 'GE', 'JNJ', 'PFE', 'UNH', 'LLY', 'CMCSA', 'VZ', 'T', 'QCOM', 'CRM', 'SNOW', 'SHOP', 'SPOT']
 
 if st.sidebar.button("Scan for High Premium"):
     with st.spinner("Analyzing Liquid 50..."):
-        targets = run_premium_hunter(LIQUID_50)
+        targets = run_premium_hunter(LIQUID_50, current_proxy)
         if targets: 
             st.sidebar.success("🎯 High Volatility Targets:")
             for t in targets: st.sidebar.write(f"- **{t}**")
@@ -263,28 +273,10 @@ with st.expander("📖 Terminal Indicator Glossary (Quick Reference)", expanded=
     st.write("- **🟢 *FLOOR CONFIRMED*:** 8-EMA Reclaimed. Consider Put Spreads only.")
     st.write("- **🟢 *NEUTRAL CHOP*:** Ideal sideways environment for Iron Condors.")
     
-    g1, g2, g3 = st.columns(3)
-    with g1:
-        st.subheader("🛡️ Trend & Momentum")
-        st.write("**8-Day EMA:** The 'Algorithmic Trend' line. Orange dotted line on chart.")
-        st.write("**RSI Stack:** Overbought (>70), Oversold (<30), Neutral (31-69).")
-        st.write("**ADX:** Above 25 = Strong Trend. Below 25 = Drifting/Chop.")
-    with g2:
-        st.subheader("🎯 Structure & Math")
-        st.write("**POC:** Highest volume price point in 90 days. Price magnet.")
-        st.write("**🔴 Support Walls:** Structural floor where buyers step in.")
-        st.write("**🟢 Resistance Walls:** Structural ceiling where sellers emerge.")
-        st.write("**Strike Delta:** Proxy for the chance of the option finishing in-the-money.")
-    with g3:
-        st.subheader("⚖️ Risk Underwriting")
-        st.write("**Max Pain:** The strike where options sellers lose the least. Acts as a Friday price magnet.")
-        st.write("**P/C OI Ratio:** Put vs Call Open Interest. > 1.2 is Bearish flow, < 0.8 is Bullish flow.")
-        st.write("**Ex-Dividend:** The cutoff date to own the stock for a dividend. High risk for short calls.")
-
 if len(selected_tickers) > 1:
     with st.expander("🧩 Portfolio Risk: 30-Day Correlation Matrix", expanded=False):
         try:
-            bench_data = yf.download(selected_tickers, period="3mo", progress=False)['Close']
+            bench_data = yf.download(selected_tickers, period="3mo", progress=False, session=get_proxy_session(current_proxy))['Close']
             st.dataframe(bench_data.pct_change().tail(30).corr().style.background_gradient(cmap='coolwarm', axis=None).format("{:.2f}"))
         except: st.write("Not enough data.")
 
@@ -293,134 +285,132 @@ tab_scanner, tab_deepdive, tab_ai = st.tabs(["🛡️ Option Scanner", "🔬 Tec
 # --- START OF PART 4 ---
 with tab_scanner:
     if selected_tickers:
-        st.markdown("##### 📡 Reading Memory Cache...")
+        if not current_proxy:
+            st.warning("⚠️ No Proxy URL entered. If the Streamlit IP is banned by Yahoo, data will fail to load. Enter your proxy URL in the sidebar.")
+            
         progress_bar = st.progress(0)
-        
-    for idx, symbol in enumerate(selected_tickers):
-        try:
-            # 1. PULL FROM LOCAL CACHE
-            hist_1y = get_cached_history(symbol)
-            if len(hist_1y) < 20: continue
-            
-            hist = hist_1y.tail(63) 
-            current_price = hist['Close'].iloc[-1]
-            prev_close = hist['Close'].iloc[-2]
-            change_dlr, change_pct = current_price - prev_close, ((current_price - prev_close) / prev_close) * 100
-            change_color = "#ff4b4b" if change_dlr < 0 else "#09ab3b"
-            
-            ma_20 = hist['Close'].rolling(window=20).mean().iloc[-1]
-            ema_8 = hist['Close'].ewm(span=8, adjust=False).mean().iloc[-1]
-            rsi_5 = calculate_rsi(hist['Close'], periods=5).iloc[-1]
-            rsi_5_prev = calculate_rsi(hist['Close'], periods=5).iloc[-2]
-            rsi_9 = calculate_rsi(hist['Close'], periods=9).iloc[-1]
-            rsi_14 = calculate_rsi(hist['Close'], periods=14).iloc[-1]
-            adx_14 = calculate_adx(hist)
-            gap_risk = calculate_gap_risk(hist)
-            poc, sup1, sup2, res1, res2 = calculate_volume_nodes(hist, current_price)
-            
-            atm_iv_display, ivr, max_pain, pc_ratio = "N/A", "N/A", "N/A", "N/A"
-            put_strike, call_strike, put_trip, call_trip = None, None, "N/A", "N/A"
-            
-            # 2. CACHED OPTIONS PULL
-            calls, puts, active_date = get_cached_options(symbol, selected_date_str)
-            target_date = active_date if active_date else selected_date_str
-            
-            if calls is not None and puts is not None:
-                if not calls.empty:
-                    closest_idx = (calls['strike'] - current_price).abs().idxmin()
-                    atm_iv_raw = calls.loc[closest_idx, 'impliedVolatility']
-                    if pd.notna(atm_iv_raw) and atm_iv_raw > 0:
-                        atm_iv_display = f"{atm_iv_raw * 100:.1f}%"
-                        ivr = f"{calculate_ivr(hist_1y, atm_iv_raw):.1f}"
-                    
-                    call_strike = find_delta_strikes(calls, current_price, dte, target_delta, 'call')
-                    put_strike = find_delta_strikes(puts, current_price, dte, target_delta, 'put')
-                    if call_strike: call_trip = f"${call_strike * 0.95:.2f}"
-                    if put_strike: put_trip = f"${put_strike * 1.05:.2f}"
-                
-                if not calls.empty and not puts.empty:
-                    tot_put_oi, tot_call_oi = puts['openInterest'].sum(), calls['openInterest'].sum()
-                    if tot_call_oi > 0: pc_ratio = f"{tot_put_oi / tot_call_oi:.2f}"
-                    all_strikes = sorted(list(set(calls['strike'].tolist() + puts['strike'].tolist())))
-                    mp_val, mp_strike = float('inf'), "N/A"
-                    for s in all_strikes:
-                        c_loss = calls[calls['strike'] < s].apply(lambda x: (s - x['strike']) * x['openInterest'], axis=1).sum()
-                        p_loss = puts[puts['strike'] > s].apply(lambda x: (x['strike'] - s) * x['openInterest'], axis=1).sum()
-                        if (c_loss + p_loss) < mp_val: mp_val, mp_strike = c_loss + p_loss, s
-                    if mp_strike != "N/A": max_pain = f"${mp_strike:.2f}"
-
-            # 3. CACHED INFO PULL
-            info = get_cached_info(symbol)
-            ex_div_date, ex_div_veto = "None scheduled", False
-            ex_ts = info.get('exDividendDate')
-            if ex_ts:
-                ex_dt = datetime.fromtimestamp(ex_ts)
-                ex_div_date = ex_dt.strftime('%Y-%m-%d')
-                if datetime.now() < ex_dt < datetime.strptime(target_date, '%Y-%m-%d'): ex_div_veto = True
-
-            calendar = get_cached_calendar(symbol)
-            earnings_date, earnings_veto = "Not scheduled", False
+        for idx, symbol in enumerate(selected_tickers):
             try:
-                if calendar is not None:
-                    e_date = pd.to_datetime(calendar.get('Earnings Date')[0]) if isinstance(calendar, dict) else pd.to_datetime(calendar.loc['Earnings Date'].iloc[0])
-                    if pd.notnull(e_date):
-                        earnings_date = e_date.strftime('%Y-%m-%d')
-                        if datetime.now() < e_date < datetime.strptime(target_date, '%Y-%m-%d'): earnings_veto = True
-            except: pass
-
-            if current_price < ema_8 and rsi_14 < 45: base_risk = "🔴 ***FALLING KNIFE***: Call Spreads Only"
-            elif current_price > ema_8 and rsi_5 > rsi_5_prev and rsi_14 < 50: base_risk = "🟢 ***FLOOR CONFIRMED***: Put Spreads Only"
-            elif gap_risk > 1.5: base_risk = f"🟠 ***GAP RISK***: High Overnight Vol ({gap_risk:.2f}%)"
-            elif adx_14 > 25: base_risk = f"🟡 ***TRENDING***: ADX {adx_14:.1f} (Pick Directional)"
-            elif current_price > ma_20: base_risk = "🟢 ***NEUTRAL CHOP***: Condor Territory"
-            else: base_risk = "🟡 ***MED RISK***: Price Stalling"
-
-            risk = base_risk + (" [EARNINGS SOON]" if earnings_veto else "") + (" ⚠️[EX-DIVIDEND DANGER]" if ex_div_veto else "")
-            ivr_color = "#09ab3b" if (isinstance(ivr, str) and ivr != "N/A" and float(ivr) > 50) else "#a6a6a6"
-
-            with st.expander(f"{symbol} | Price: ${current_price:.2f} | Target Chain: {target_date} | Risk: {risk}", expanded=False):
-                c1, c2, c3, c4, c5 = st.columns(5)
-                with c1: st.markdown(custom_metric_box("Today's Change", f"${current_price:.2f}", f"{change_dlr:+.2f} ({change_pct:+.2f}%)", sub_color=change_color), unsafe_allow_html=True)
-                with c2: st.markdown(custom_metric_box(f"{int(target_delta*100)}Δ Put", f"${put_strike}" if put_strike else "N/A", f"Trip: {put_trip}", sub_color="#ffcc00"), unsafe_allow_html=True)
-                with c3: st.markdown(custom_metric_box(f"{int(target_delta*100)}Δ Call", f"${call_strike}" if call_strike else "N/A", f"Trip: {call_trip}", sub_color="#ffcc00"), unsafe_allow_html=True)
-                with c4: st.markdown(custom_metric_box("Volatility Rank", f"IVR: {ivr}", f"ATM IV: {atm_iv_display}", val_color=ivr_color), unsafe_allow_html=True)
-                with c5: st.markdown(custom_metric_box("Earnings Date", f"{earnings_date}", "Upcoming Catalyst", sub_color="#ffcc00" if earnings_veto else "#a6a6a6"), unsafe_allow_html=True)
+                hist_1y = get_cached_history(symbol, proxy_url=current_proxy)
+                if hist_1y.empty: continue
                 
-                st.markdown("---")
-                st.caption("🛡️ Risk Underwriting Data")
-                u1, u2, u3 = st.columns(3)
-                with u1: st.markdown(custom_metric_box("Max Pain", f"{max_pain}", "Gravity point for Expiration", sub_color="#a6a6a6"), unsafe_allow_html=True)
-                with u2:
-                    pc_color, pc_sub = "#a6a6a6", "Neutral Flow"
-                    try:
-                        pcr = float(pc_ratio)
-                        if pcr > 1.2: pc_color, pc_sub = "#ff4b4b", "Heavy Bearish Flow"
-                        elif pcr < 0.8: pc_color, pc_sub = "#09ab3b", "Heavy Bullish Flow"
-                    except: pass
-                    st.markdown(custom_metric_box("P/C OI Ratio", f"{pc_ratio}", pc_sub, sub_color=pc_color), unsafe_allow_html=True)
-                with u3:
-                    div_color = "#ffcc00" if ex_div_veto else "#a6a6a6"
-                    st.markdown(custom_metric_box("Ex-Dividend", f"{ex_div_date}", "Early Assignment Risk" if ex_div_veto else "Upcoming Ex-Div Date", sub_color=div_color), unsafe_allow_html=True)
+                hist = hist_1y.tail(63) 
+                current_price = hist['Close'].iloc[-1]
+                prev_close = hist['Close'].iloc[-2]
+                change_dlr, change_pct = current_price - prev_close, ((current_price - prev_close) / prev_close) * 100
+                change_color = "#ff4b4b" if change_dlr < 0 else "#09ab3b"
+                
+                ma_20 = hist['Close'].rolling(window=20).mean().iloc[-1]
+                ema_8 = hist['Close'].ewm(span=8, adjust=False).mean().iloc[-1]
+                rsi_5 = calculate_rsi(hist['Close'], periods=5).iloc[-1]
+                rsi_5_prev = calculate_rsi(hist['Close'], periods=5).iloc[-2]
+                rsi_9 = calculate_rsi(hist['Close'], periods=9).iloc[-1]
+                rsi_14 = calculate_rsi(hist['Close'], periods=14).iloc[-1]
+                adx_14 = calculate_adx(hist)
+                gap_risk = calculate_gap_risk(hist)
+                poc, sup1, sup2, res1, res2 = calculate_volume_nodes(hist, current_price)
+                
+                atm_iv_display, ivr, max_pain, pc_ratio = "N/A", "N/A", "N/A", "N/A"
+                put_strike, call_strike, put_trip, call_trip = None, None, "N/A", "N/A"
+                
+                calls, puts, active_date = get_cached_options(symbol, selected_date_str, proxy_url=current_proxy)
+                target_date = active_date if active_date else selected_date_str
+                
+                if calls is not None and puts is not None:
+                    if not calls.empty:
+                        closest_idx = (calls['strike'] - current_price).abs().idxmin()
+                        atm_iv_raw = calls.loc[closest_idx, 'impliedVolatility']
+                        if pd.notna(atm_iv_raw) and atm_iv_raw > 0:
+                            atm_iv_display = f"{atm_iv_raw * 100:.1f}%"
+                            ivr = f"{calculate_ivr(hist_1y, atm_iv_raw):.1f}"
+                        
+                        call_strike = find_delta_strikes(calls, current_price, dte, target_delta, 'call')
+                        put_strike = find_delta_strikes(puts, current_price, dte, target_delta, 'put')
+                        if call_strike: call_trip = f"${call_strike * 0.95:.2f}"
+                        if put_strike: put_trip = f"${put_strike * 1.05:.2f}"
+                    
+                    if not calls.empty and not puts.empty:
+                        tot_put_oi, tot_call_oi = puts['openInterest'].sum(), calls['openInterest'].sum()
+                        if tot_call_oi > 0: pc_ratio = f"{tot_put_oi / tot_call_oi:.2f}"
+                        all_strikes = sorted(list(set(calls['strike'].tolist() + puts['strike'].tolist())))
+                        mp_val, mp_strike = float('inf'), "N/A"
+                        for s in all_strikes:
+                            c_loss = calls[calls['strike'] < s].apply(lambda x: (s - x['strike']) * x['openInterest'], axis=1).sum()
+                            p_loss = puts[puts['strike'] > s].apply(lambda x: (x['strike'] - s) * x['openInterest'], axis=1).sum()
+                            if (c_loss + p_loss) < mp_val: mp_val, mp_strike = c_loss + p_loss, s
+                        if mp_strike != "N/A": max_pain = f"${mp_strike:.2f}"
 
-                st.markdown("---")
-                v1, v2, v3, v4 = st.columns(4)
-                def get_s(v): return "Oversold" if v <= 30 else "Overbought" if v >= 70 else "Neutral"
-                with v1: st.caption("🧲 POC & Trend"); st.write(f"**POC:** {poc}"); st.write(f"**ADX:** {adx_14:.1f}")
-                with v2: st.caption("📈 RSI Stack"); st.write(f"5D: {rsi_5:.1f} ({get_s(rsi_5)})"); st.write(f"9D: {rsi_9:.1f} ({get_s(rsi_9)})"); st.write(f"14D: {rsi_14:.1f} ({get_s(rsi_14)})")
-                with v3: st.caption("🔴 Support Walls"); st.write(f"**Wall 1:** {sup1}"); st.write(f"**Wall 2:** {sup2}")
-                with v4: st.caption("🟢 Resistance Walls"); st.write(f"**Wall 1:** {res1}"); st.write(f"**Wall 2:** {res2}")
+                info = get_cached_info(symbol, proxy_url=current_proxy)
+                ex_div_date, ex_div_veto = "None scheduled", False
+                ex_ts = info.get('exDividendDate')
+                if ex_ts:
+                    ex_dt = datetime.fromtimestamp(ex_ts)
+                    ex_div_date = ex_dt.strftime('%Y-%m-%d')
+                    if datetime.now() < ex_dt < datetime.strptime(target_date, '%Y-%m-%d'): ex_div_veto = True
 
-                fig = go.Figure(data=[go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'], name="Price")])
-                fig.add_trace(go.Scatter(x=hist.index, y=hist['Close'].ewm(span=8, adjust=False).mean(), line=dict(color='#ff9900', width=1.5, dash='dot'), name="8-EMA"))
-                if call_strike: fig.add_hline(y=call_strike, line_width=2, line_color="green", annotation_text=f"{target_delta}Δ Call")
-                if put_strike: fig.add_hline(y=put_strike, line_width=2, line_color="red", annotation_text=f"{target_delta}Δ Put")
-                fig.update_layout(template="plotly_dark", height=400, margin=dict(l=0, r=0, t=30, b=0), xaxis_rangeslider_visible=False)
-                st.plotly_chart(fig, use_container_width=True)
+                calendar = get_cached_calendar(symbol, proxy_url=current_proxy)
+                earnings_date, earnings_veto = "Not scheduled", False
+                try:
+                    if calendar is not None:
+                        e_date = pd.to_datetime(calendar.get('Earnings Date')[0]) if isinstance(calendar, dict) else pd.to_datetime(calendar.loc['Earnings Date'].iloc[0])
+                        if pd.notnull(e_date):
+                            earnings_date = e_date.strftime('%Y-%m-%d')
+                            if datetime.now() < e_date < datetime.strptime(target_date, '%Y-%m-%d'): earnings_veto = True
+                except: pass
 
-        except Exception as e: st.error(f"Error loading {symbol}: {str(e)}")
-        if selected_tickers: progress_bar.progress((idx + 1) / len(selected_tickers))
+                if current_price < ema_8 and rsi_14 < 45: base_risk = "🔴 ***FALLING KNIFE***: Call Spreads Only"
+                elif current_price > ema_8 and rsi_5 > rsi_5_prev and rsi_14 < 50: base_risk = "🟢 ***FLOOR CONFIRMED***: Put Spreads Only"
+                elif gap_risk > 1.5: base_risk = f"🟠 ***GAP RISK***: High Overnight Vol ({gap_risk:.2f}%)"
+                elif adx_14 > 25: base_risk = f"🟡 ***TRENDING***: ADX {adx_14:.1f} (Pick Directional)"
+                elif current_price > ma_20: base_risk = "🟢 ***NEUTRAL CHOP***: Condor Territory"
+                else: base_risk = "🟡 ***MED RISK***: Price Stalling"
+
+                risk = base_risk + (" [EARNINGS SOON]" if earnings_veto else "") + (" ⚠️[EX-DIVIDEND DANGER]" if ex_div_veto else "")
+                ivr_color = "#09ab3b" if (isinstance(ivr, str) and ivr != "N/A" and float(ivr) > 50) else "#a6a6a6"
+
+                with st.expander(f"{symbol} | Price: ${current_price:.2f} | Target Chain: {target_date} | Risk: {risk}", expanded=False):
+                    c1, c2, c3, c4, c5 = st.columns(5)
+                    with c1: st.markdown(custom_metric_box("Today's Change", f"${current_price:.2f}", f"{change_dlr:+.2f} ({change_pct:+.2f}%)", sub_color=change_color), unsafe_allow_html=True)
+                    with c2: st.markdown(custom_metric_box(f"{int(target_delta*100)}Δ Put", f"${put_strike}" if put_strike else "N/A", f"Trip: {put_trip}", sub_color="#ffcc00"), unsafe_allow_html=True)
+                    with c3: st.markdown(custom_metric_box(f"{int(target_delta*100)}Δ Call", f"${call_strike}" if call_strike else "N/A", f"Trip: {call_trip}", sub_color="#ffcc00"), unsafe_allow_html=True)
+                    with c4: st.markdown(custom_metric_box("Volatility Rank", f"IVR: {ivr}", f"ATM IV: {atm_iv_display}", val_color=ivr_color), unsafe_allow_html=True)
+                    with c5: st.markdown(custom_metric_box("Earnings Date", f"{earnings_date}", "Upcoming Catalyst", sub_color="#ffcc00" if earnings_veto else "#a6a6a6"), unsafe_allow_html=True)
+                    
+                    st.markdown("---")
+                    st.caption("🛡️ Risk Underwriting Data")
+                    u1, u2, u3 = st.columns(3)
+                    with u1: st.markdown(custom_metric_box("Max Pain", f"{max_pain}", "Gravity point for Expiration", sub_color="#a6a6a6"), unsafe_allow_html=True)
+                    with u2:
+                        pc_color, pc_sub = "#a6a6a6", "Neutral Flow"
+                        try:
+                            pcr = float(pc_ratio)
+                            if pcr > 1.2: pc_color, pc_sub = "#ff4b4b", "Heavy Bearish Flow"
+                            elif pcr < 0.8: pc_color, pc_sub = "#09ab3b", "Heavy Bullish Flow"
+                        except: pass
+                        st.markdown(custom_metric_box("P/C OI Ratio", f"{pc_ratio}", pc_sub, sub_color=pc_color), unsafe_allow_html=True)
+                    with u3:
+                        div_color = "#ffcc00" if ex_div_veto else "#a6a6a6"
+                        st.markdown(custom_metric_box("Ex-Dividend", f"{ex_div_date}", "Early Assignment Risk" if ex_div_veto else "Upcoming Ex-Div Date", sub_color=div_color), unsafe_allow_html=True)
+
+                    st.markdown("---")
+                    v1, v2, v3, v4 = st.columns(4)
+                    def get_s(v): return "Oversold" if v <= 30 else "Overbought" if v >= 70 else "Neutral"
+                    with v1: st.caption("🧲 POC & Trend"); st.write(f"**POC:** {poc}"); st.write(f"**ADX:** {adx_14:.1f}")
+                    with v2: st.caption("📈 RSI Stack"); st.write(f"5D: {rsi_5:.1f} ({get_s(rsi_5)})"); st.write(f"9D: {rsi_9:.1f} ({get_s(rsi_9)})"); st.write(f"14D: {rsi_14:.1f} ({get_s(rsi_14)})")
+                    with v3: st.caption("🔴 Support Walls"); st.write(f"**Wall 1:** {sup1}"); st.write(f"**Wall 2:** {sup2}")
+                    with v4: st.caption("🟢 Resistance Walls"); st.write(f"**Wall 1:** {res1}"); st.write(f"**Wall 2:** {res2}")
+
+                    fig = go.Figure(data=[go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'], name="Price")])
+                    fig.add_trace(go.Scatter(x=hist.index, y=hist['Close'].ewm(span=8, adjust=False).mean(), line=dict(color='#ff9900', width=1.5, dash='dot'), name="8-EMA"))
+                    if call_strike: fig.add_hline(y=call_strike, line_width=2, line_color="green", annotation_text=f"{target_delta}Δ Call")
+                    if put_strike: fig.add_hline(y=put_strike, line_width=2, line_color="red", annotation_text=f"{target_delta}Δ Put")
+                    fig.update_layout(template="plotly_dark", height=400, margin=dict(l=0, r=0, t=30, b=0), xaxis_rangeslider_visible=False)
+                    st.plotly_chart(fig, use_container_width=True)
+
+            except Exception as e: st.error(f"Error loading {symbol}: {str(e)}")
+            progress_bar.progress((idx + 1) / len(selected_tickers))
             
-    if selected_tickers: progress_bar.empty()
+        progress_bar.empty()
 # --- END OF PART 4 ---
 # --- START OF PART 5 ---
 with tab_deepdive:
@@ -431,7 +421,7 @@ with tab_deepdive:
     
     if deep_ticker:
         try:
-            hist_dd = get_cached_history(deep_ticker)
+            hist_dd = get_cached_history(deep_ticker, proxy_url=current_proxy)
             if len(hist_dd) < 50:
                 st.warning("Not enough trading history to generate a robust analysis.")
             else:
@@ -443,10 +433,9 @@ with tab_deepdive:
                 adx_14_dd = calculate_adx(hist_6mo)
                 poc_dd, sup1_dd, sup2_dd, res1_dd, res2_dd = calculate_volume_nodes(hist_6mo, dd_price)
 
-                info_dd = get_cached_info(deep_ticker)
+                info_dd = get_cached_info(deep_ticker, proxy_url=current_proxy)
                 short_pct = info_dd.get('shortPercentOfFloat', 0)
                 inst_pct = info_dd.get('heldPercentInstitutions', 0)
-                target_price = info_dd.get('targetMeanPrice')
                 
                 tr = pd.concat([hist_6mo['High']-hist_6mo['Low'], abs(hist_6mo['High']-hist_6mo['Close'].shift(1)), abs(hist_6mo['Low']-hist_6mo['Close'].shift(1))], axis=1).max(axis=1)
                 atr_14 = tr.rolling(14).mean().iloc[-1]
@@ -461,9 +450,8 @@ with tab_deepdive:
                 oi_fig = None
                 
                 try:
-                    # Look 30 days out for structure
                     target_dd = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d')
-                    calls, puts, _ = get_cached_options(deep_ticker, target_dd)
+                    calls, puts, _ = get_cached_options(deep_ticker, target_dd, proxy_url=current_proxy)
                     
                     if calls is not None and puts is not None:
                         total_vol = calls['volume'].fillna(0).sum() + puts['volume'].fillna(0).sum()
@@ -582,7 +570,7 @@ with tab_ai:
                         context_str = "CURRENT QUANTITATIVE MARKET DATA:\n"
                         for sym in ai_tickers:
                             try:
-                                hist_ai = get_cached_history(sym)
+                                hist_ai = get_cached_history(sym, proxy_url=current_proxy)
                                 if len(hist_ai) < 50: continue
                                 price = hist_ai['Close'].iloc[-1]
                                 
@@ -593,7 +581,7 @@ with tab_ai:
                                 
                                 atm_iv = 0.3
                                 try:
-                                    calls, puts, _ = get_cached_options(sym, (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d'))
+                                    calls, puts, _ = get_cached_options(sym, (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d'), proxy_url=current_proxy)
                                     if calls is not None and not calls.empty:
                                         atm_iv = calls.iloc[(calls['strike'] - price).abs().argsort()[:1]]['impliedVolatility'].values[0]
                                 except: pass
@@ -601,7 +589,7 @@ with tab_ai:
                                 ivr = calculate_ivr(hist_ai, atm_iv)
                                 ivr_str = f"{ivr:.1f}" if isinstance(ivr, (int, float)) else "N/A"
                                 
-                                info_ai = get_cached_info(sym)
+                                info_ai = get_cached_info(sym, proxy_url=current_proxy)
                                 short_pct = info_ai.get('shortPercentOfFloat', 0) * 100
                                 
                                 context_str += f"\n--- {sym} ---\n"
