@@ -9,6 +9,7 @@ from scipy.stats import norm
 import urllib.request
 import json
 import time
+import requests
 
 try:
     import google.generativeai as genai
@@ -20,16 +21,28 @@ except ImportError:
 st.set_page_config(page_title="Aegis Option Scanner", layout="wide", initial_sidebar_state="expanded")
 st.markdown("<h2 style='font-size: 2.2rem; margin-bottom: 0rem;'>🛡️ Aegis Option Scanner | Delta-Based Underwriting</h2>", unsafe_allow_html=True)
 
+# --- BROWSER SPOOFING SESSION ---
+def get_yf_session():
+    """Generates a spoofed session to bypass Yahoo Finance 403 blocks."""
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "*/*",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive"
+    })
+    return session
+
 # --- THE STEALTH CACHE (ANTI-API BLOCK ENGINE) ---
 @st.cache_data(ttl=900, show_spinner=False) 
 def get_cached_history(symbol, period="1y"):
-    try: return yf.Ticker(symbol).history(period=period)
+    try: return yf.Ticker(symbol, session=get_yf_session()).history(period=period)
     except: return pd.DataFrame()
 
 @st.cache_data(ttl=900, show_spinner=False)
 def get_cached_options(symbol, target_date):
     try:
-        t = yf.Ticker(symbol)
+        t = yf.Ticker(symbol, session=get_yf_session())
         valid_dates = t.options
         if not valid_dates: return None, None, None
         
@@ -45,12 +58,12 @@ def get_cached_options(symbol, target_date):
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_cached_info(symbol):
-    try: return yf.Ticker(symbol).info
+    try: return yf.Ticker(symbol, session=get_yf_session()).info
     except: return {}
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_cached_calendar(symbol):
-    try: return yf.Ticker(symbol).calendar
+    try: return yf.Ticker(symbol, session=get_yf_session()).calendar
     except: return None
 
 # --- BLACK-SCHOLES DELTA ENGINE ---
@@ -139,7 +152,7 @@ def run_premium_hunter(ticker_list):
     """Scans the liquid 50 for the highest Volatility Rank (Premium Sellers Market)"""
     targets = []
     try:
-        bulk_data = yf.download(ticker_list, period="1y", progress=False)['Close']
+        bulk_data = yf.download(ticker_list, period="1y", progress=False, session=get_yf_session())['Close']
         for sym in ticker_list:
             try:
                 hist = bulk_data[sym].dropna()
@@ -161,14 +174,14 @@ def run_premium_hunter(ticker_list):
 def fetch_macro_data():
     vix_val, vix_pct, fg_val, fg_rating = "N/A", "N/A", "N/A", "N/A"
     try:
-        vix_hist = yf.Ticker("^VIX").history(period="5d")
+        vix_hist = yf.Ticker("^VIX", session=get_yf_session()).history(period="5d")
         vix_val = float(vix_hist['Close'].iloc[-1])
         vix_pct = float(((vix_val - vix_hist['Close'].iloc[-2]) / vix_hist['Close'].iloc[-2]) * 100)
     except: pass
     try:
         url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
             'Accept': 'application/json',
             'Origin': 'https://edition.cnn.com',
             'Referer': 'https://edition.cnn.com/'
@@ -183,7 +196,8 @@ def fetch_macro_data():
 
 def custom_metric_box(label, value, sub_value, val_color="#FAFAFA", sub_color="#a6a6a6"):
     return f'<div style="line-height: 1.4; margin-bottom: 14px;"><span style="font-size: 0.85rem; color: #a6a6a6; font-family: sans-serif;">{label}</span><br><span style="font-size: 1.8rem; font-weight: 600; color: {val_color}; font-family: sans-serif;">{value}</span><br><span style="font-size: 0.9rem; font-weight: 500; color: {sub_color}; font-family: sans-serif;">{sub_value}</span></div>'
-
+# --- END OF PART 2 ---
+# --- START OF PART 3 ---
 st.sidebar.header("🛠️ Dashboard Controls")
 gemini_api_key = st.secrets["GEMINI_API_KEY"] if "GEMINI_API_KEY" in st.secrets else st.sidebar.text_input("🔑 Gemini API Key", type="password")
 
@@ -193,8 +207,7 @@ mac1, mac2 = st.sidebar.columns(2)
 with mac1: st.markdown(custom_metric_box("VIX Index", f"{vix_v:.2f}" if isinstance(vix_v, float) else "N/A", f"{vix_p:+.2f}%" if isinstance(vix_p, float) else "", sub_color="#ff4b4b" if (isinstance(vix_p, float) and vix_p > 0) else "#09ab3b"), unsafe_allow_html=True)
 with mac2: st.markdown(custom_metric_box("Fear & Greed", str(fg_v), str(fg_r), val_color="#ffcc00"), unsafe_allow_html=True)
 st.sidebar.markdown("---")
-# --- END OF PART 2 ---
-# --- START OF PART 3 ---
+
 def load_url_bench():
     if "bench" in st.query_params: return st.query_params["bench"].split(",")
     return ["AMZN", "AAPL", "MSFT", "META", "GOOGL", "NVDA", "AMD", "PLTR", "TSLA", "NFLX"]
@@ -284,7 +297,7 @@ with st.expander("📖 Terminal Indicator Glossary (Quick Reference)", expanded=
 if len(selected_tickers) > 1:
     with st.expander("🧩 Portfolio Risk: 30-Day Correlation Matrix", expanded=False):
         try:
-            bench_data = yf.download(selected_tickers, period="3mo", progress=False)['Close']
+            bench_data = yf.download(selected_tickers, period="3mo", progress=False, session=get_yf_session())['Close']
             st.dataframe(bench_data.pct_change().tail(30).corr().style.background_gradient(cmap='coolwarm', axis=None).format("{:.2f}"))
         except: st.write("Not enough data.")
 
