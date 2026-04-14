@@ -26,10 +26,13 @@ def get_proxy_session(proxy_url=None):
     """Builds a requests session routed through your Webshare proxy."""
     session = requests.Session()
     session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "*/*",
+        "Connection": "keep-alive"
     })
     if proxy_url:
-        session.proxies = {"http": proxy_url, "https": proxy_url}
+        if not proxy_url.startswith("http"): proxy_url = "http://" + proxy_url
+        session.proxies.update({"http": proxy_url, "https": proxy_url})
     return session
 
 # --- THE STEALTH CACHE ---
@@ -45,7 +48,6 @@ def get_cached_options(symbol, target_date, proxy_url=None):
         valid_dates = t.options
         if not valid_dates: return None, None, None
         
-        # Snap to closest date if holiday/weekend
         if target_date not in valid_dates:
             target_dt = datetime.strptime(target_date, '%Y-%m-%d')
             valid_dts = [datetime.strptime(d, '%Y-%m-%d') for d in valid_dates]
@@ -77,10 +79,7 @@ def find_delta_strikes(chain_df, S, dte, target_delta, option_type):
         r = 0.04
         df = chain_df[chain_df['strike'] >= S].copy() if option_type == 'call' else chain_df[chain_df['strike'] <= S].copy()
         if df.empty: return None
-        
-        # Sanitize Yahoo's broken IV data to prevent math crashes
         df['impliedVolatility'] = df['impliedVolatility'].replace(0, np.nan).fillna(0.3) 
-        
         df['delta'] = df.apply(lambda x: calculate_delta(S, x['strike'], T, r, x['impliedVolatility'], option_type), axis=1)
         return df.loc[(df['delta'].abs() - target_delta).abs().idxmin(), 'strike']
     except: return None
@@ -195,15 +194,25 @@ st.sidebar.header("🛠️ Dashboard Controls")
 
 if st.sidebar.button("🧹 Clear System Cache", type="primary"):
     st.cache_data.clear()
-    st.sidebar.success("Cache Purged!")
+    st.sidebar.success("Cache Purged! Refreshing Data...")
     time.sleep(1)
     st.rerun()
 
-gemini_api_key = st.secrets["GEMINI_API_KEY"] if "GEMINI_API_KEY" in st.secrets else st.sidebar.text_input("🔑 Gemini API Key", type="password")
+st.sidebar.markdown("---")
+st.sidebar.subheader("🛡️ Network Security")
 
-# PROXY INPUT - Passed down to all yfinance functions
-proxy_url_input = st.secrets["PROXY_URL"] if "PROXY_URL" in st.secrets else st.sidebar.text_input("🌐 Webshare Proxy URL", type="password", help="Format: http://username:password@ip:port")
-current_proxy = proxy_url_input if proxy_url_input else None
+# PROXY INPUT w/ STATUS INDICATOR
+proxy_val = st.sidebar.text_input("🌐 Webshare Proxy URL", type="password", help="Make sure you press ENTER after pasting the URL!")
+current_proxy = proxy_val.strip() if proxy_val.strip() != "" else None
+
+if current_proxy:
+    st.sidebar.success("✅ Proxy Registered")
+else:
+    st.sidebar.error("⚠️ Proxy Missing (Press Enter)")
+
+st.sidebar.markdown("---")
+
+gemini_api_key = st.secrets["GEMINI_API_KEY"] if "GEMINI_API_KEY" in st.secrets else st.sidebar.text_input("🔑 Gemini API Key", type="password")
 
 vix_v, vix_p, fg_v, fg_r = fetch_macro_data(current_proxy)
 st.sidebar.markdown("### 🌍 Macro Sentiment")
@@ -286,13 +295,17 @@ tab_scanner, tab_deepdive, tab_ai = st.tabs(["🛡️ Option Scanner", "🔬 Tec
 with tab_scanner:
     if selected_tickers:
         if not current_proxy:
-            st.warning("⚠️ No Proxy URL entered. If the Streamlit IP is banned by Yahoo, data will fail to load. Enter your proxy URL in the sidebar.")
+            st.warning("⚠️ No Proxy URL entered. Please paste it in the sidebar and press ENTER on your keyboard.")
             
         progress_bar = st.progress(0)
         for idx, symbol in enumerate(selected_tickers):
             try:
                 hist_1y = get_cached_history(symbol, proxy_url=current_proxy)
-                if hist_1y.empty: continue
+                
+                # PREVENT BLANK SCREEN: Explicitly show error if proxy/connection fails
+                if hist_1y is None or hist_1y.empty or len(hist_1y) < 20: 
+                    st.error(f"❌ Connection Blocked for **{symbol}**: Could not fetch historical price data. Check if your proxy is active.")
+                    continue
                 
                 hist = hist_1y.tail(63) 
                 current_price = hist['Close'].iloc[-1]
@@ -422,7 +435,7 @@ with tab_deepdive:
     if deep_ticker:
         try:
             hist_dd = get_cached_history(deep_ticker, proxy_url=current_proxy)
-            if len(hist_dd) < 50:
+            if hist_dd is None or hist_dd.empty or len(hist_dd) < 50:
                 st.warning("Not enough trading history to generate a robust analysis.")
             else:
                 hist_6mo = hist_dd.tail(126)
@@ -571,7 +584,7 @@ with tab_ai:
                         for sym in ai_tickers:
                             try:
                                 hist_ai = get_cached_history(sym, proxy_url=current_proxy)
-                                if len(hist_ai) < 50: continue
+                                if hist_ai is None or len(hist_ai) < 50: continue
                                 price = hist_ai['Close'].iloc[-1]
                                 
                                 hist_6mo = hist_ai.tail(126)
@@ -590,7 +603,7 @@ with tab_ai:
                                 ivr_str = f"{ivr:.1f}" if isinstance(ivr, (int, float)) else "N/A"
                                 
                                 info_ai = get_cached_info(sym, proxy_url=current_proxy)
-                                short_pct = info_ai.get('shortPercentOfFloat', 0) * 100
+                                short_pct = info_ai.get('shortPercentOfFloat', 0) * 100 if info_ai else 0
                                 
                                 context_str += f"\n--- {sym} ---\n"
                                 context_str += f"Price: ${price:.2f}\n"
