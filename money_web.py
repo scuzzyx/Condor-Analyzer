@@ -1,5 +1,6 @@
 # --- START OF PART 1 ---
 import streamlit as st
+import yfinance as yf
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
@@ -9,6 +10,7 @@ import urllib.request
 import json
 import time
 import requests
+import re
 import concurrent.futures
 
 try:
@@ -21,115 +23,90 @@ except ImportError:
 st.set_page_config(page_title="Aegis Option Scanner", layout="wide", initial_sidebar_state="expanded")
 st.markdown("<h2 style='font-size: 2.2rem; margin-bottom: 0rem;'>🛡️ Aegis Option Scanner | Delta-Based Underwriting</h2>", unsafe_allow_html=True)
 
-# --- THE AEGIS DIRECT SCRAPER w/ CRUMB ENGINE ---
-class AegisScraper:
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
-        "Connection": "keep-alive"
-    })
-    crumb = None
-
-    @classmethod
-    def _get_crumb(cls):
-        if cls.crumb: return cls.crumb
-        try:
-            # 1. Ping fc.yahoo.com to set session cookies
-            cls.session.get('https://fc.yahoo.com', timeout=4)
-            # 2. Exchange cookies for cryptographic crumb
-            res = cls.session.get('https://query1.finance.yahoo.com/v1/test/getcrumb', timeout=4)
-            if res.status_code == 200:
-                cls.crumb = res.text.strip()
-        except: pass
-        return cls.crumb
-
-    @classmethod
-    def history(cls, symbol, period="1y"):
-        try:
-            url = f"https://query2.finance.yahoo.com/v8/finance/chart/{symbol}?range={period}&interval=1d"
-            res = cls.session.get(url, timeout=4)
-            if res.status_code != 200: return pd.DataFrame()
-            data = res.json()['chart']['result'][0]
-            df = pd.DataFrame(data['indicators']['quote'][0])
-            df.index = pd.to_datetime(data['timestamp'], unit='s')
-            return df[['open', 'high', 'low', 'close', 'volume']].rename(columns=lambda x: x.title()).dropna()
-        except: return pd.DataFrame()
-
-    @classmethod
-    def options(cls, symbol, target_date):
-        try:
-            crumb = cls._get_crumb()
-            url = f"https://query2.finance.yahoo.com/v7/finance/options/{symbol}"
-            if crumb: url += f"?crumb={crumb}"
-            
-            res = cls.session.get(url, timeout=5)
-            if res.status_code != 200: return None, None, None
-            
-            data = res.json().get('optionChain', {}).get('result', [])
-            if not data: return None, None, None
-            
-            valid_timestamps = data[0].get('expirationDates', [])
-            if not valid_timestamps: return None, None, None
-            
-            target_ts = int(datetime.strptime(target_date, '%Y-%m-%d').timestamp())
-            closest_ts = min(valid_timestamps, key=lambda x: abs(x - target_ts))
-            active_date = datetime.fromtimestamp(closest_ts).strftime('%Y-%m-%d')
-            
-            url_chain = f"https://query2.finance.yahoo.com/v7/finance/options/{symbol}?date={closest_ts}"
-            if crumb: url_chain += f"&crumb={crumb}"
-            
-            res_chain = cls.session.get(url_chain, timeout=5)
-            if res_chain.status_code != 200: return None, None, None
-            
-            opts = res_chain.json()['optionChain']['result'][0]['options'][0]
-            
-            calls = pd.DataFrame(opts.get('calls', []))
-            puts = pd.DataFrame(opts.get('puts', []))
-            
-            # Sanitize columns for the UI engine
-            if not calls.empty:
-                calls['strike'] = pd.to_numeric(calls.get('strike'))
-                calls['impliedVolatility'] = pd.to_numeric(calls.get('impliedVolatility', 0.3))
-                calls['openInterest'] = pd.to_numeric(calls.get('openInterest', 0))
-            if not puts.empty:
-                puts['strike'] = pd.to_numeric(puts.get('strike'))
-                puts['impliedVolatility'] = pd.to_numeric(puts.get('impliedVolatility', 0.3))
-                puts['openInterest'] = pd.to_numeric(puts.get('openInterest', 0))
-                
-            return calls, puts, active_date
-        except: return None, None, None
-
-    @classmethod
-    def info_and_calendar(cls, symbol):
-        try:
-            url = f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}?modules=summaryDetail,defaultKeyStatistics,calendarEvents"
-            res = cls.session.get(url, timeout=4)
-            data = res.json()['quoteSummary']['result'][0]
-            
-            info = {}
-            detail = data.get('summaryDetail', {})
-            stats = data.get('defaultKeyStatistics', {})
-            cal = data.get('calendarEvents', {}).get('earnings', {})
-            
-            if 'exDividendDate' in detail: info['exDividendDate'] = detail['exDividendDate'].get('raw')
-            if 'shortPercentOfFloat' in stats: info['shortPercentOfFloat'] = stats['shortPercentOfFloat'].get('raw', 0)
-            if 'heldPercentInstitutions' in stats: info['heldPercentInstitutions'] = stats['heldPercentInstitutions'].get('raw', 0)
-            
-            earn_date = None
-            if 'earningsDate' in cal and len(cal['earningsDate']) > 0: earn_date = cal['earningsDate'][0].get('raw')
-            return info, earn_date
-        except: return {}, None
-
+# --- THE STEALTH CACHE ---
 @st.cache_data(ttl=900, show_spinner=False) 
-def get_cached_history(symbol, period="1y"): return AegisScraper.history(symbol, period)
+def get_cached_history(symbol, period="1y"):
+    try: return yf.Ticker(symbol).history(period=period)
+    except: return pd.DataFrame()
 
 @st.cache_data(ttl=900, show_spinner=False)
-def get_cached_options(symbol, target_date): return AegisScraper.options(symbol, target_date)
+def get_cached_options(symbol, target_date):
+    # STRATEGY 1: Official yfinance API
+    try:
+        t = yf.Ticker(symbol)
+        valid_dates = t.options
+        if valid_dates:
+            target_dt = datetime.strptime(target_date, '%Y-%m-%d')
+            valid_dts = [datetime.strptime(d, '%Y-%m-%d') for d in valid_dates]
+            snap_date = min(valid_dts, key=lambda d: abs(d - target_dt)).strftime('%Y-%m-%d')
+            chain = t.option_chain(snap_date)
+            if not chain.calls.empty: return chain.calls, chain.puts, snap_date
+    except: pass
+        
+    # STRATEGY 2: The Crumb-Bypass HTML Scraper (If API is IP-Blocked)
+    try:
+        url = f"https://finance.yahoo.com/quote/{symbol}/options"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"}
+        res = requests.get(url, headers=headers, timeout=8)
+        
+        # Scrape unix timestamps from HTML source to find valid expirations
+        timestamps = [int(ts) for ts in re.findall(r'(\d{10})', res.text) if ts.startswith('17') and len(ts)==10]
+        timestamps = sorted(list(set(timestamps)))
+        
+        target_ts = int(datetime.strptime(target_date, '%Y-%m-%d').timestamp())
+        
+        if timestamps:
+            closest_ts = min(timestamps, key=lambda x: abs(x - target_ts))
+            active_date = datetime.fromtimestamp(closest_ts).strftime('%Y-%m-%d')
+            if closest_ts != timestamps[0]: # Target specific date if not default
+                url = f"https://finance.yahoo.com/quote/{symbol}/options?date={closest_ts}"
+                res = requests.get(url, headers=headers, timeout=8)
+        else:
+            active_date = target_date
+            
+        dfs = pd.read_html(res.text)
+        if len(dfs) >= 2:
+            # Yahoo frontend lists Calls as Table 0, Puts as Table 1
+            calls, puts = dfs[0], dfs[1]
+            
+            def clean_df(df):
+                df.columns = [c.lower() for c in df.columns]
+                rename_map = {}
+                for col in df.columns:
+                    if 'strike' in col: rename_map[col] = 'strike'
+                    elif 'implied volatility' in col or 'volatility' in col: rename_map[col] = 'impliedVolatility'
+                    elif 'open interest' in col: rename_map[col] = 'openInterest'
+                df = df.rename(columns=rename_map)
+                
+                if 'impliedVolatility' in df.columns:
+                    df['impliedVolatility'] = df['impliedVolatility'].astype(str).str.replace('%', '').str.replace(',', '')
+                    df['impliedVolatility'] = pd.to_numeric(df['impliedVolatility'], errors='coerce') / 100.0
+                else: df['impliedVolatility'] = 0.3
+                    
+                if 'openInterest' in df.columns:
+                    df['openInterest'] = df['openInterest'].astype(str).str.replace('-', '0').str.replace(',', '')
+                    df['openInterest'] = pd.to_numeric(df['openInterest'], errors='coerce').fillna(0)
+                else: df['openInterest'] = 0
+                    
+                if 'strike' in df.columns:
+                    df['strike'] = pd.to_numeric(df['strike'].astype(str).str.replace(',', ''), errors='coerce')
+                    
+                return df
+                
+            return clean_df(calls), clean_df(puts), active_date
+    except: pass
+    
+    return None, None, None
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def get_cached_info_and_calendar(symbol): return AegisScraper.info_and_calendar(symbol)
+def get_cached_info(symbol):
+    try: return yf.Ticker(symbol).info
+    except: return {}
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_cached_calendar(symbol):
+    try: return yf.Ticker(symbol).calendar
+    except: return None
 
 # --- BLACK-SCHOLES DELTA ENGINE ---
 def calculate_delta(S, K, T, r, sigma, option_type='call'):
@@ -212,39 +189,37 @@ def get_pure_fridays(weeks=26):
 @st.cache_data(ttl=3600)
 def run_premium_hunter(ticker_list):
     targets = []
-    def fetch_single(sym): return sym, AegisScraper.history(sym, "1y")
-    
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        results = executor.map(fetch_single, ticker_list)
-        
-    for sym, hist in results:
-        try:
-            if hist.empty or len(hist) < 50: continue
-            returns = hist['Close'].pct_change().dropna()
-            hv_series = returns.rolling(20).std() * np.sqrt(252)
-            curr_hv = hv_series.iloc[-1]
-            hv_min, hv_max = hv_series.min(), hv_series.max()
-            if hv_max > hv_min:
-                hv_rank = ((curr_hv - hv_min) / (hv_max - hv_min)) * 100
-                if hv_rank > 60: targets.append((sym, hv_rank))
-        except: continue
-    targets.sort(key=lambda x: x[1], reverse=True)
-    return [f"{t[0]} (Rank: {t[1]:.0f})" for t in targets[:6]]
+    try:
+        bulk_data = yf.download(ticker_list, period="1y", progress=False)['Close']
+        for sym in ticker_list:
+            try:
+                hist = bulk_data[sym].dropna()
+                if len(hist) < 50: continue
+                returns = hist.pct_change().dropna()
+                hv_series = returns.rolling(20).std() * np.sqrt(252)
+                curr_hv = hv_series.iloc[-1]
+                hv_min, hv_max = hv_series.min(), hv_series.max()
+                if hv_max > hv_min:
+                    hv_rank = ((curr_hv - hv_min) / (hv_max - hv_min)) * 100
+                    if hv_rank > 60: targets.append((sym, hv_rank))
+            except: continue
+        targets.sort(key=lambda x: x[1], reverse=True)
+        return [f"{t[0]} (Rank: {t[1]:.0f})" for t in targets[:6]]
+    except: return []
 
 @st.cache_data(ttl=900)
 def fetch_macro_data():
     vix_val, vix_pct, fg_val, fg_rating = "N/A", "N/A", "N/A", "N/A"
     try:
-        vix_hist = AegisScraper.history("^VIX", "5d")
-        if not vix_hist.empty:
-            vix_val = float(vix_hist['Close'].iloc[-1])
-            vix_pct = float(((vix_val - vix_hist['Close'].iloc[-2]) / vix_hist['Close'].iloc[-2]) * 100)
+        vix_hist = yf.Ticker("^VIX").history(period="5d")
+        vix_val = float(vix_hist['Close'].iloc[-1])
+        vix_pct = float(((vix_val - vix_hist['Close'].iloc[-2]) / vix_hist['Close'].iloc[-2]) * 100)
     except: pass
     try:
         url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
         headers = {'User-Agent': 'Mozilla/5.0'}
         req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=3) as response:
+        with urllib.request.urlopen(req, timeout=5) as response:
             data = json.loads(response.read().decode())
             fg_val = round(data['fear_and_greed']['score'])
             fg_rating = data['fear_and_greed']['rating'].title()
@@ -336,13 +311,8 @@ with st.expander("📖 Terminal Indicator Glossary (Quick Reference)", expanded=
 if len(selected_tickers) > 1:
     with st.expander("🧩 Portfolio Risk: 30-Day Correlation Matrix", expanded=False):
         try:
-            matrix_data = {}
-            for sym in selected_tickers:
-                df = AegisScraper.history(sym, "3mo")
-                if not df.empty: matrix_data[sym] = df['Close']
-            if matrix_data:
-                bench_data = pd.DataFrame(matrix_data)
-                st.dataframe(bench_data.pct_change().tail(30).corr().style.background_gradient(cmap='coolwarm', axis=None).format("{:.2f}"))
+            bench_data = yf.download(selected_tickers, period="3mo", progress=False)['Close']
+            st.dataframe(bench_data.pct_change().tail(30).corr().style.background_gradient(cmap='coolwarm', axis=None).format("{:.2f}"))
         except: st.write("Not enough data.")
 
 tab_scanner, tab_deepdive, tab_ai = st.tabs(["🛡️ Option Scanner", "🔬 Technical Deep Dive", "🧠 AI Quant Co-Pilot"])
@@ -404,7 +374,7 @@ with tab_scanner:
                         if (c_loss + p_loss) < mp_val: mp_val, mp_strike = c_loss + p_loss, s
                     if mp_strike != "N/A": max_pain = f"${mp_strike:.2f}"
 
-            info, earnings_ts = get_cached_info_and_calendar(symbol)
+            info = get_cached_info(symbol)
             ex_div_date, ex_div_veto = "None scheduled", False
             ex_ts = info.get('exDividendDate')
             if ex_ts:
@@ -412,11 +382,15 @@ with tab_scanner:
                 ex_div_date = ex_dt.strftime('%Y-%m-%d')
                 if datetime.now() < ex_dt < datetime.strptime(target_date, '%Y-%m-%d'): ex_div_veto = True
 
+            calendar = get_cached_calendar(symbol)
             earnings_date, earnings_veto = "Not scheduled", False
-            if earnings_ts:
-                e_date = datetime.fromtimestamp(earnings_ts)
-                earnings_date = e_date.strftime('%Y-%m-%d')
-                if datetime.now() < e_date < datetime.strptime(target_date, '%Y-%m-%d'): earnings_veto = True
+            try:
+                if calendar is not None:
+                    e_date = pd.to_datetime(calendar.get('Earnings Date')[0]) if isinstance(calendar, dict) else pd.to_datetime(calendar.loc['Earnings Date'].iloc[0])
+                    if pd.notnull(e_date):
+                        earnings_date = e_date.strftime('%Y-%m-%d')
+                        if datetime.now() < e_date < datetime.strptime(target_date, '%Y-%m-%d'): earnings_veto = True
+            except: pass
 
             if current_price < ema_8 and rsi_14 < 45: base_risk = "🔴 ***FALLING KNIFE***: Call Spreads Only"
             elif current_price > ema_8 and rsi_5 > rsi_5_prev and rsi_14 < 50: base_risk = "🟢 ***FLOOR CONFIRMED***: Put Spreads Only"
@@ -493,7 +467,7 @@ with tab_deepdive:
                 adx_14_dd = calculate_adx(hist_6mo)
                 poc_dd, sup1_dd, sup2_dd, res1_dd, res2_dd = calculate_volume_nodes(hist_6mo, dd_price)
 
-                info_dd, _ = get_cached_info_and_calendar(deep_ticker)
+                info_dd = get_cached_info(deep_ticker)
                 short_pct = info_dd.get('shortPercentOfFloat', 0)
                 inst_pct = info_dd.get('heldPercentInstitutions', 0)
                 
@@ -649,7 +623,7 @@ with tab_ai:
                                 ivr = calculate_ivr(hist_ai, atm_iv)
                                 ivr_str = f"{ivr:.1f}" if isinstance(ivr, (int, float)) else "N/A"
                                 
-                                info_ai, _ = get_cached_info_and_calendar(sym)
+                                info_ai = get_cached_info(sym)
                                 short_pct = info_ai.get('shortPercentOfFloat', 0) * 100
                                 
                                 context_str += f"\n--- {sym} ---\n"
