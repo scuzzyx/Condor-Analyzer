@@ -66,7 +66,8 @@ def pull_master_payload(ticker, current_price):
     else:
         strike_filter = ""
 
-    url = f"https://api.massive.com/v3/snapshot/options/{ticker}?limit=250{strike_filter}&sort=expiration_date&order=asc&apiKey={st.secrets['MASSIVE_API_KEY']}"
+    # FIXED: Reverted domain back to api.polygon.io so the servers actually respond
+    url = f"https://api.polygon.io/v3/snapshot/options/{ticker}?limit=250{strike_filter}&sort=expiration_date&order=asc&apiKey={st.secrets['MASSIVE_API_KEY']}"
     
     try:
         response = requests.get(url)
