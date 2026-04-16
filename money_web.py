@@ -7,6 +7,7 @@ import plotly.graph_objects as go
 from scipy.stats import norm
 import time
 import requests
+import yfinance as yf # Added Yahoo Finance
 
 # --- CONFIG & THEME ---
 st.set_page_config(page_title="Aegis 2.0 | Command Center", layout="wide", initial_sidebar_state="expanded")
@@ -25,7 +26,7 @@ def custom_metric_box(label, value, sub_value, val_color="#FAFAFA", sub_color="#
 # --- END OF PART 1 ---
 # --- START OF PART 2: API ENGINES ---
 def get_alpaca_price(ticker):
-    """Fetches instant live prices using 'trades' and feed=iex for free tier reliability."""
+    """Fetches instant live prices using Alpaca."""
     url = f"https://data.alpaca.markets/v2/stocks/{ticker}/trades/latest?feed=iex"
     headers = {"APCA-API-KEY-ID": st.secrets["ALPACA_KEY_ID"], "APCA-API-SECRET-KEY": st.secrets["ALPACA_SECRET_KEY"]}
     try:
@@ -58,56 +59,47 @@ def get_alpaca_history(ticker):
         return pd.DataFrame()
 
 def pull_master_payload(ticker, current_price):
-    """Pulls the Option Chain Snapshot using a 15% Strike Collar."""
-    if current_price > 0:
-        min_strike = round(current_price * 0.85, 2)
-        max_strike = round(current_price * 1.15, 2)
-        strike_filter = f"&strike_price.gte={min_strike}&strike_price.lte={max_strike}"
-    else:
-        strike_filter = ""
-
-    url = f"https://api.polygon.io/v3/snapshot/options/{ticker}?limit=250{strike_filter}&sort=expiration_date&order=asc&apiKey={st.secrets['MASSIVE_API_KEY']}"
-    
+    """Pulls the Option Chain using yfinance to bypass API limits and get free Open Interest."""
     try:
-        response = requests.get(url)
+        stock = yf.Ticker(ticker)
+        expirations = stock.options
         
-        # --- THE WIRETAP: If Polygon rejects us, print the exact reason to the dashboard ---
-        if response.status_code != 200:
-            st.error(f"Polygon API Rejected {ticker}. Code: {response.status_code} | Reason: {response.text}")
+        if not expirations:
             return None
             
-        data = response.json()
-        raw_results = data.get('results', [])
+        calls_list, puts_list = [], []
         
-        calls_list, puts_list, exp_dates = [], [], set()
+        # Grab the first 5 expiration dates to load into the vault quickly
+        target_expirations = list(expirations[:5])
         
-        for contract in raw_results:
-            details = contract.get('details', {})
-            exp_date = details.get('expiration_date')
+        for exp_date in target_expirations:
+            chain = stock.option_chain(exp_date)
             
-            if not exp_date: continue
-            
-            exp_dates.add(exp_date)
-            
-            row = {
-                'strike': details.get('strike_price'),
-                'openInterest': contract.get('open_interest', 0),
-                'volume': contract.get('day', {}).get('volume', 0),
-                'impliedVolatility': contract.get('implied_volatility', 0.3)
-            }
-            
-            if details.get('contract_type') == 'call': 
-                calls_list.append((exp_date, row))
-            else: 
-                puts_list.append((exp_date, row))
-            
+            # Process Calls
+            for index, row in chain.calls.iterrows():
+                calls_list.append((exp_date, {
+                    'strike': row['strike'],
+                    'openInterest': row['openInterest'] if pd.notna(row['openInterest']) else 0,
+                    'volume': row['volume'] if pd.notna(row['volume']) else 0,
+                    'impliedVolatility': row['impliedVolatility']
+                }))
+                
+            # Process Puts
+            for index, row in chain.puts.iterrows():
+                puts_list.append((exp_date, {
+                    'strike': row['strike'],
+                    'openInterest': row['openInterest'] if pd.notna(row['openInterest']) else 0,
+                    'volume': row['volume'] if pd.notna(row['volume']) else 0,
+                    'impliedVolatility': row['impliedVolatility']
+                }))
+                
         return {
             "calls": calls_list, 
             "puts": puts_list, 
-            "expirations": sorted(list(exp_dates))
+            "expirations": target_expirations
         }
     except Exception as e:
-        st.error(f"Python Error: {str(e)}")
+        st.error(f"yfinance Error: {str(e)}")
         return None
 # --- END OF PART 2 ---
 # --- START OF PART 3: AEGIS MATH ENGINE ---
