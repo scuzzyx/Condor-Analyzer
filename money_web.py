@@ -22,14 +22,17 @@ if "ui_refresh_time" not in st.session_state:
 
 def custom_metric_box(label, value, sub_value, val_color="#FAFAFA", sub_color="#a6a6a6"):
     return f'<div style="line-height: 1.4; margin-bottom: 14px;"><span style="font-size: 0.85rem; color: #a6a6a6; font-family: sans-serif;">{label}</span><br><span style="font-size: 1.8rem; font-weight: 600; color: {val_color}; font-family: sans-serif;">{value}</span><br><span style="font-size: 0.9rem; font-weight: 500; color: {sub_color}; font-family: sans-serif;">{sub_value}</span></div>'
-    # --- START OF PART 2: API ENGINES ---
-
+# --- END OF PART 1 ---
+# --- START OF PART 2: API ENGINES ---
 def get_alpaca_price(ticker):
-    """Fetches instant live prices."""
-    url = f"https://data.alpaca.markets/v2/stocks/{ticker}/quotes/latest"
+    """Fetches instant live prices using 'trades' and feed=iex for free tier reliability."""
+    url = f"https://data.alpaca.markets/v2/stocks/{ticker}/trades/latest?feed=iex"
     headers = {"APCA-API-KEY-ID": st.secrets["ALPACA_KEY_ID"], "APCA-API-SECRET-KEY": st.secrets["ALPACA_SECRET_KEY"]}
     try:
-        return requests.get(url, headers=headers).json()["quote"]["ap"]
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            return response.json()["trade"]["p"] 
+        return 0.0
     except:
         return 0.0
 
@@ -37,43 +40,63 @@ def get_alpaca_history(ticker):
     """Fetches 150 days of daily candles for RSI, ADX, and Volume Walls."""
     end = datetime.now().strftime('%Y-%m-%d')
     start = (datetime.now() - timedelta(days=200)).strftime('%Y-%m-%d')
-    url = f"https://data.alpaca.markets/v2/stocks/{ticker}/bars?timeframe=1Day&start={start}&end={end}&limit=150"
+    url = f"https://data.alpaca.markets/v2/stocks/{ticker}/bars?timeframe=1Day&start={start}&end={end}&limit=150&feed=iex"
     headers = {"APCA-API-KEY-ID": st.secrets["ALPACA_KEY_ID"], "APCA-API-SECRET-KEY": st.secrets["ALPACA_SECRET_KEY"]}
     
     try:
-        data = requests.get(url, headers=headers).json()
-        df = pd.DataFrame(data['bars'])
-        df['t'] = pd.to_datetime(df['t'])
-        df = df.rename(columns={'o': 'Open', 'h': 'High', 'l': 'Low', 'c': 'Close', 'v': 'Volume', 't': 'Date'})
-        df.set_index('Date', inplace=True)
-        return df
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            data = response.json()
+            if 'bars' in data and data['bars']:
+                df = pd.DataFrame(data['bars'])
+                df['t'] = pd.to_datetime(df['t'])
+                df = df.rename(columns={'o': 'Open', 'h': 'High', 'l': 'Low', 'c': 'Close', 'v': 'Volume', 't': 'Date'})
+                df.set_index('Date', inplace=True)
+                return df
+        return pd.DataFrame()
     except:
         return pd.DataFrame()
 
-def pull_master_payload(ticker):
-    """Pulls the full option chain from Massive. Translates it into DataFrames."""
-    # NOTE: You will need to verify this exact endpoint URL in Massive's Developer Docs.
-    url = f"https://api.massive.com/v3/reference/options/contracts?underlying_ticker={ticker}&apiKey={st.secrets['MASSIVE_API_KEY']}"
+def pull_master_payload(ticker, current_price):
+    """Pulls the Option Chain Snapshot using a 15% Strike Collar to maximize expiration dates."""
+    if current_price > 0:
+        min_strike = round(current_price * 0.85, 2)
+        max_strike = round(current_price * 1.15, 2)
+        strike_filter = f"&strike_price.gte={min_strike}&strike_price.lte={max_strike}"
+    else:
+        strike_filter = ""
+
+    url = f"https://api.massive.com/v3/snapshot/options/{ticker}?limit=250{strike_filter}&sort=expiration_date&order=asc&apiKey={st.secrets['MASSIVE_API_KEY']}"
     
     try:
-        response = requests.get(url).json()
-        # Parse Massive's JSON into Pandas DataFrames for Aegis Math
-        # NOTE: Adjust these keys based on Massive's exact JSON response format
-        raw_results = response.get('results', [])
+        response = requests.get(url)
+        if response.status_code != 200:
+            return None
+            
+        data = response.json()
+        raw_results = data.get('results', [])
         
         calls_list, puts_list, exp_dates = [], [], set()
         
         for contract in raw_results:
-            exp_date = contract.get('expiration_date')
+            details = contract.get('details', {})
+            exp_date = details.get('expiration_date')
+            
+            if not exp_date: continue
+            
             exp_dates.add(exp_date)
+            
             row = {
-                'strike': contract.get('strike_price'),
+                'strike': details.get('strike_price'),
                 'openInterest': contract.get('open_interest', 0),
-                'volume': contract.get('volume', 0),
+                'volume': contract.get('day', {}).get('volume', 0),
                 'impliedVolatility': contract.get('implied_volatility', 0.3)
             }
-            if contract.get('contract_type') == 'call': calls_list.append((exp_date, row))
-            else: puts_list.append((exp_date, row))
+            
+            if details.get('contract_type') == 'call': 
+                calls_list.append((exp_date, row))
+            else: 
+                puts_list.append((exp_date, row))
             
         return {
             "calls": calls_list, 
@@ -82,8 +105,8 @@ def pull_master_payload(ticker):
         }
     except:
         return None
-        # --- START OF PART 3: AEGIS MATH ENGINE ---
-
+# --- END OF PART 2 ---
+# --- START OF PART 3: AEGIS MATH ENGINE ---
 def calculate_delta(S, K, T, r, sigma, option_type='call'):
     if T <= 0 or sigma <= 0: return 0.5
     d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
@@ -138,8 +161,8 @@ def calculate_volume_nodes(hist, current_price, bins=30):
         s2 = f"${lower[-2]:.2f}" if len(lower) > 1 else "⚠️ No Wall"
         return f"${poc:.2f}", s1, s2, r1, r2
     except: return "N/A", "N/A", "N/A", "N/A", "N/A"
-        # --- START OF PART 4: DASHBOARD UI & COOLDOWN ---
-
+# --- END OF PART 3 ---
+# --- START OF PART 4: DASHBOARD UI & COOLDOWN ---
 st.sidebar.header("The Bench (Max 5)")
 bench = []
 for i in range(1, 6):
@@ -158,7 +181,6 @@ for i, ticker in enumerate(bench):
 
 st.divider()
 
-# --- THE COOLDOWN LOGIC ---
 current_time = time.time()
 time_since_last_scan = current_time - st.session_state.last_pull_time
 cooldown_period = 61.0
@@ -178,8 +200,9 @@ with col1:
             
             for ticker in bench:
                 with st.spinner(f"Downloading Master Chain for {ticker}..."):
+                    current_price = live_prices.get(ticker, 0.0)
                     st.session_state.options_vault[ticker] = {
-                        "options": pull_master_payload(ticker),
+                        "options": pull_master_payload(ticker, current_price),
                         "history": get_alpaca_history(ticker)
                     }
             time.sleep(1)
@@ -190,8 +213,8 @@ with col2:
         st.success(f"✅ Vault Loaded securely at: **{st.session_state.ui_refresh_time}**. You are offline and safe to explore.")
     else:
         st.warning("⚠️ Vault is empty. Click the button to pull market data.")
-        # --- START OF PART 5: THE SAFE ZONE UI ---
-
+# --- END OF PART 4 ---
+# --- START OF PART 5: THE SAFE ZONE UI ---
 if st.session_state.options_vault:
     tabs = st.tabs(bench)
     
@@ -205,14 +228,12 @@ if st.session_state.options_vault:
             history_df = vault_data["history"]
             current_price = live_prices.get(ticker, 0.0)
             
-            # 1. Offline UI Filters
             filter_col1, filter_col2 = st.columns(2)
             with filter_col1:
                 selected_exp = st.selectbox(f"Select Expiration ({ticker})", vault_data["options"]["expirations"], key=f"exp_{ticker}")
             with filter_col2:
                 target_delta = st.select_slider(f"Target Strike Delta ({ticker})", options=[0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40], value=0.15, key=f"del_{ticker}")
 
-            # 2. Filter the Master Payload Data locally
             calls_raw = [row for date, row in vault_data["options"]["calls"] if date == selected_exp]
             puts_raw = [row for date, row in vault_data["options"]["puts"] if date == selected_exp]
             calls = pd.DataFrame(calls_raw)
@@ -220,16 +241,13 @@ if st.session_state.options_vault:
             
             dte = max(1, (datetime.strptime(selected_exp, '%Y-%m-%d') - datetime.now()).days)
             
-            # 3. Calculate Math Offline
             max_pain, pc_ratio, call_strike, put_strike = "N/A", "N/A", "N/A", "N/A"
             poc, s1, s2, r1, r2 = calculate_volume_nodes(history_df, current_price) if not history_df.empty else ("N/A", "N/A", "N/A", "N/A", "N/A")
             
             if not calls.empty and not puts.empty:
-                # Put/Call Ratio
                 tot_put_oi, tot_call_oi = puts['openInterest'].sum(), calls['openInterest'].sum()
                 if tot_call_oi > 0: pc_ratio = f"{tot_put_oi / tot_call_oi:.2f}"
                 
-                # Max Pain
                 all_strikes = sorted(list(set(calls['strike'].tolist() + puts['strike'].tolist())))
                 mp_val, mp_strike = float('inf'), "N/A"
                 for s in all_strikes:
@@ -238,13 +256,11 @@ if st.session_state.options_vault:
                     if (c_loss + p_loss) < mp_val: mp_val, mp_strike = c_loss + p_loss, s
                 if mp_strike != "N/A": max_pain = f"${mp_strike:.2f}"
                 
-                # Deltas
                 c_strike = find_delta_strikes(calls, current_price, dte, target_delta, 'call')
                 p_strike = find_delta_strikes(puts, current_price, dte, target_delta, 'put')
                 if c_strike: call_strike = f"${c_strike:.2f}"
                 if p_strike: put_strike = f"${p_strike:.2f}"
 
-            # 4. Render the UI
             st.markdown("---")
             st.caption("🛡️ Risk Underwriting Data")
             u1, u2, u3, u4 = st.columns(4)
@@ -259,11 +275,10 @@ if st.session_state.options_vault:
             with v2: st.caption("🔴 Support Walls"); st.write(f"**Wall 1:** {s1}"); st.write(f"**Wall 2:** {s2}")
             with v3: st.caption("🟢 Resistance Walls"); st.write(f"**Wall 1:** {r1}"); st.write(f"**Wall 2:** {r2}")
 
-            # 5. Render Chart
             if not history_df.empty:
                 fig = go.Figure(data=[go.Candlestick(x=history_df.index, open=history_df['Open'], high=history_df['High'], low=history_df['Low'], close=history_df['Close'], name="Price")])
                 if c_strike: fig.add_hline(y=float(c_strike.replace('$','')), line_width=2, line_color="green", annotation_text=f"{target_delta}Δ Call")
                 if p_strike: fig.add_hline(y=float(p_strike.replace('$','')), line_width=2, line_color="red", annotation_text=f"{target_delta}Δ Put")
                 fig.update_layout(template="plotly_dark", height=400, margin=dict(l=0, r=0, t=30, b=0), xaxis_rangeslider_visible=False)
                 st.plotly_chart(fig, use_container_width=True)
-                
+# --- END OF PART 5 ---
