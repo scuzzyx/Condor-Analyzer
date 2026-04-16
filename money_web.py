@@ -103,27 +103,93 @@ def custom_metric_box(label, value, sub_value, val_color="#FAFAFA", sub_color="#
 # --- END OF PART 1 ---
 # --- START OF PART 2: VAULT ENGINES & SCRAPERS ---
 def fetch_vault_payload(symbol, target_date):
-    """Pulls everything needed for one ticker without relying on Streamlit's cache cache."""
+    """Pulls options data and history using the institutional Tradier API."""
     try:
+        headers = {
+            "Authorization": f"Bearer {st.secrets['TRADIER_API_KEY']}",
+            "Accept": "application/json"
+        }
+        
+        # 1. Fetch History (1 year of daily candles via Tradier)
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=365)
+        hist_url = f"https://api.tradier.com/v1/markets/history?symbol={symbol}&start={start_date.strftime('%Y-%m-%d')}&end={end_date.strftime('%Y-%m-%d')}"
+        hist_resp = requests.get(hist_url, headers=headers)
+        
+        hist_df = pd.DataFrame()
+        if hist_resp.status_code == 200:
+            hist_data = hist_resp.json()
+            if 'history' in hist_data and hist_data['history'] and 'day' in hist_data['history']:
+                day_data = hist_data['history']['day']
+                if isinstance(day_data, dict): day_data = [day_data]
+                hist_df = pd.DataFrame(day_data)
+                if not hist_df.empty:
+                    hist_df['Date'] = pd.to_datetime(hist_df['date'])
+                    hist_df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}, inplace=True)
+                    hist_df.set_index('Date', inplace=True)
+                    
+        # Fallback to yfinance if Tradier history is completely empty (rare)
+        if hist_df.empty:
+            hist_df = yf.Ticker(symbol).history(period="1y")
+
+        # 2. Fetch Options Expirations to find nearest to target_date
+        exp_url = f"https://api.tradier.com/v1/markets/options/expirations?symbol={symbol}"
+        exp_resp = requests.get(exp_url, headers=headers)
+        snap_date = target_date
+        
+        if exp_resp.status_code == 200:
+            exp_data = exp_resp.json()
+            if 'expirations' in exp_data and exp_data['expirations'] and 'date' in exp_data['expirations']:
+                dates = exp_data['expirations']['date']
+                if isinstance(dates, str): dates = [dates]
+                target_dt = datetime.strptime(target_date, '%Y-%m-%d')
+                valid_dts = [datetime.strptime(d, '%Y-%m-%d') for d in dates]
+                if valid_dts:
+                    snap_date = min(valid_dts, key=lambda d: abs(d - target_dt)).strftime('%Y-%m-%d')
+
+        # 3. Fetch Option Chain for snap_date (With Greeks & IV)
+        chain_url = f"https://api.tradier.com/v1/markets/options/chains?symbol={symbol}&expiration={snap_date}&greeks=true"
+        chain_resp = requests.get(chain_url, headers=headers)
+        
+        calls_list, puts_list = [], []
+        if chain_resp.status_code == 200:
+            chain_data = chain_resp.json()
+            if 'options' in chain_data and chain_data['options'] and 'option' in chain_data['options']:
+                options_data = chain_data['options']['option']
+                if isinstance(options_data, dict): options_data = [options_data]
+                
+                for opt in options_data:
+                    greeks = opt.get('greeks')
+                    iv = 0.3
+                    if isinstance(greeks, dict):
+                        # Tradier calculates the IV directly on their servers
+                        iv = greeks.get('mid_iv') or greeks.get('smv_vol') or 0.3
+                        
+                    row = {
+                        'strike': float(opt.get('strike') or 0.0),
+                        'openInterest': int(opt.get('open_interest') or 0),
+                        'volume': int(opt.get('volume') or 0),
+                        'impliedVolatility': float(iv)
+                    }
+                    if opt.get('option_type') == 'call':
+                        calls_list.append(row)
+                    elif opt.get('option_type') == 'put':
+                        puts_list.append(row)
+
+        calls = pd.DataFrame(calls_list)
+        puts = pd.DataFrame(puts_list)
+
+        # 4. Use yfinance purely for Company Info (Earnings/Dividends calendar)
         t = yf.Ticker(symbol)
-        hist = t.history(period="1y")
-        info = t.info
-        calendar = t.calendar
-        
-        calls, puts, snap_date = pd.DataFrame(), pd.DataFrame(), target_date
-        
-        valid_dates = t.options
-        if valid_dates:
-            target_dt = datetime.strptime(target_date, '%Y-%m-%d')
-            valid_dts = [datetime.strptime(d, '%Y-%m-%d') for d in valid_dates]
-            snap_date = min(valid_dts, key=lambda d: abs(d - target_dt)).strftime('%Y-%m-%d')
-            chain = t.option_chain(snap_date)
-            calls, puts = chain.calls, chain.puts
-            if not calls.empty and 'impliedVolatility' not in calls.columns: calls['impliedVolatility'] = 0.3
-            if not puts.empty and 'impliedVolatility' not in puts.columns: puts['impliedVolatility'] = 0.3
-            
+        try:
+            info = t.info
+            calendar = t.calendar
+        except:
+            info = {}
+            calendar = None
+
         return {
-            "history": hist,
+            "history": hist_df,
             "info": info,
             "calendar": calendar,
             "calls": calls,
@@ -131,6 +197,7 @@ def fetch_vault_payload(symbol, target_date):
             "snap_date": snap_date
         }
     except Exception as e:
+        print(f"Error fetching data for {symbol}: {e}")
         return None
 
 @st.cache_data(ttl=3600)
@@ -159,14 +226,16 @@ def run_premium_hunter(ticker_list):
 def fetch_macro_data():
     vix_val, vix_pct, fg_val, fg_rating = "N/A", "N/A", "N/A", "N/A"
     try:
-        vix_hist = yf.Ticker("^VIX").history(period="5d")
-        if not vix_hist.empty:
+        # Expanded period to 1mo to prevent holiday/weekend data gaps
+        vix_hist = yf.Ticker("^VIX").history(period="1mo")
+        if not vix_hist.empty and len(vix_hist) >= 2:
             vix_val = float(vix_hist['Close'].iloc[-1])
             vix_pct = float(((vix_val - vix_hist['Close'].iloc[-2]) / vix_hist['Close'].iloc[-2]) * 100)
     except: pass
+    
     try:
         url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36', 'Accept': 'application/json'}
+        headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'}
         res = requests.get(url, headers=headers, timeout=5)
         if res.status_code == 200:
             data = res.json()
