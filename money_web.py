@@ -320,7 +320,8 @@ col1, col2 = st.columns([1, 3])
 with col1:
     if st.button("🚀 UPDATE MASTER VAULT", use_container_width=True, type="primary"):
         st.session_state.vault.clear()
-        with st.spinner(f"Downloading deep options data for {len(selected_tickers)} tickers..."):
+        # The restrictor plate is off. No time.sleep() needed for Tradier!
+        with st.spinner(f"Downloading institutional options data for {len(selected_tickers)} tickers..."):
             for sym in selected_tickers:
                 st.session_state.vault[sym] = fetch_vault_payload(sym, selected_date_str)
         
@@ -330,7 +331,7 @@ with col1:
 with col2:
     if st.session_state.vault_time:
         if st.session_state.vault_params == selected_date_str:
-            st.success(f"✅ Vault Loaded at **{st.session_state.vault_time}**. Target Date: **{selected_date_str}**. You are offline and safe from rate limits.")
+            st.success(f"✅ Vault Loaded at **{st.session_state.vault_time}**. Target Date: **{selected_date_str}**. Powered by Tradier API.")
         else:
             st.warning("⚠️ You changed the Expiration Date in the sidebar. Click **Update Master Vault** to fetch the new options chains.")
     else:
@@ -376,11 +377,18 @@ with tab_scanner:
             target_date = v_data["snap_date"]
             
             if calls is not None and puts is not None and not calls.empty:
-                closest_idx = (calls['strike'] - current_price).abs().idxmin()
-                atm_iv_raw = calls.loc[closest_idx, 'impliedVolatility']
-                if pd.notna(atm_iv_raw) and atm_iv_raw > 0:
+                # Grab the 3 closest strikes and average them for a robust IV reading
+                calls['strike_dist'] = (calls['strike'] - current_price).abs()
+                closest_calls = calls.nsmallest(3, 'strike_dist')
+                valid_ivs = closest_calls[closest_calls['impliedVolatility'] > 0.01]['impliedVolatility']
+                
+                if not valid_ivs.empty:
+                    atm_iv_raw = float(valid_ivs.mean())
                     atm_iv_display = f"{atm_iv_raw * 100:.1f}%"
-                    ivr = f"{calculate_ivr(hist_1y, atm_iv_raw):.1f}"
+                    
+                    calc_ivr = calculate_ivr(hist_1y, atm_iv_raw)
+                    if isinstance(calc_ivr, (int, float)):
+                        ivr = f"{calc_ivr:.1f}"
                 
                 call_strike = find_delta_strikes(calls, current_price, dte, target_delta, 'call')
                 put_strike = find_delta_strikes(puts, current_price, dte, target_delta, 'put')
