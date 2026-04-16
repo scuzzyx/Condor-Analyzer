@@ -58,7 +58,7 @@ def get_alpaca_history(ticker):
         return pd.DataFrame()
 
 def pull_master_payload(ticker, current_price):
-    """Pulls the Option Chain Snapshot using a 15% Strike Collar to maximize expiration dates."""
+    """Pulls the Option Chain Snapshot using a 15% Strike Collar."""
     if current_price > 0:
         min_strike = round(current_price * 0.85, 2)
         max_strike = round(current_price * 1.15, 2)
@@ -66,12 +66,14 @@ def pull_master_payload(ticker, current_price):
     else:
         strike_filter = ""
 
-    # FIXED: Reverted domain back to api.polygon.io so the servers actually respond
     url = f"https://api.polygon.io/v3/snapshot/options/{ticker}?limit=250{strike_filter}&sort=expiration_date&order=asc&apiKey={st.secrets['MASSIVE_API_KEY']}"
     
     try:
         response = requests.get(url)
+        
+        # --- THE WIRETAP: If Polygon rejects us, print the exact reason to the dashboard ---
         if response.status_code != 200:
+            st.error(f"Polygon API Rejected {ticker}. Code: {response.status_code} | Reason: {response.text}")
             return None
             
         data = response.json()
@@ -104,7 +106,8 @@ def pull_master_payload(ticker, current_price):
             "puts": puts_list, 
             "expirations": sorted(list(exp_dates))
         }
-    except:
+    except Exception as e:
+        st.error(f"Python Error: {str(e)}")
         return None
 # --- END OF PART 2 ---
 # --- START OF PART 3: AEGIS MATH ENGINE ---
