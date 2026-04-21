@@ -478,14 +478,22 @@ with tab_scanner:
                 
                 st.markdown("---")
                 st.caption("🛡️ Probability Matrix & Risk Underwriting")
-                u1, u2, u3, u4 = st.columns(4)
+                u1, u2, u3, u4, u5 = st.columns(5)
                 with u1: 
                     em_range = f"±${expected_move_val:.2f}" if expected_move_val > 0 else "N/A"
                     em_sub = f"[{current_price - expected_move_val:.2f} to {current_price + expected_move_val:.2f}]" if expected_move_val > 0 else ""
                     st.markdown(custom_metric_box("Expected Move", em_range, em_sub, val_color="#09ab3b"), unsafe_allow_html=True)
                 with u2: st.markdown(custom_metric_box(f"Put POP / P50", f"{put_pop}", f"P50: {put_p50}", sub_color="#a6a6a6"), unsafe_allow_html=True)
                 with u3: st.markdown(custom_metric_box(f"Call POP / P50", f"{call_pop}", f"P50: {call_p50}", sub_color="#a6a6a6"), unsafe_allow_html=True)
-                with u4: st.markdown(custom_metric_box("Max Pain", f"{max_pain}", f"P/C Ratio: {pc_ratio}", sub_color="#a6a6a6"), unsafe_allow_html=True)
+                with u4: st.markdown(custom_metric_box("Max Pain", f"{max_pain}", "Gravity Point", sub_color="#a6a6a6"), unsafe_allow_html=True)
+                with u5:
+                    pc_color, pc_sub = "#a6a6a6", "Neutral Flow"
+                    try:
+                        pcr = float(pc_ratio)
+                        if pcr > 1.2: pc_color, pc_sub = "#ff4b4b", "Heavy Bearish Flow"
+                        elif pcr < 0.8: pc_color, pc_sub = "#09ab3b", "Heavy Bullish Flow"
+                    except: pass
+                    st.markdown(custom_metric_box("P/C OI Ratio", f"{pc_ratio}", pc_sub, sub_color=pc_color), unsafe_allow_html=True)
 
                 st.markdown("---")
                 v1, v2, v3, v4 = st.columns(4)
