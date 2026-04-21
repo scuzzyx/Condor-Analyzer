@@ -21,7 +21,7 @@ if "vault_time" not in st.session_state:
 if "vault_params" not in st.session_state:
     st.session_state.vault_params = ""
 
-# --- BLACK-SCHOLES DELTA ENGINE ---
+# --- BLACK-SCHOLES DELTA ENGINE & PROBABILITIES ---
 def calculate_delta(S, K, T, r, sigma, option_type='call'):
     if T <= 0 or sigma <= 0: return 0.5
     d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
@@ -32,11 +32,23 @@ def find_delta_strikes(chain_df, S, dte, target_delta, option_type):
         T = max(dte, 1) / 365.0 
         r = 0.04
         df = chain_df[chain_df['strike'] >= S].copy() if option_type == 'call' else chain_df[chain_df['strike'] <= S].copy()
-        if df.empty: return None
+        if df.empty: return None, None
         df['impliedVolatility'] = df['impliedVolatility'].replace(0, np.nan).fillna(0.3) 
         df['delta'] = df.apply(lambda x: calculate_delta(S, x['strike'], T, r, x['impliedVolatility'], option_type), axis=1)
-        return float(df.loc[(df['delta'].abs() - target_delta).abs().idxmin(), 'strike'])
-    except: return None
+        best_match = df.loc[(df['delta'].abs() - target_delta).abs().idxmin()]
+        return float(best_match['strike']), float(best_match['delta'])
+    except: return None, None
+
+def calculate_expected_move(price, iv, dte):
+    if pd.isna(iv) or iv <= 0: return 0.0
+    return price * iv * np.sqrt(max(1, dte) / 365.0)
+
+def calculate_pop_metrics(delta_val):
+    if pd.isna(delta_val): return "N/A", "N/A"
+    pop = (1 - abs(delta_val)) * 100
+    # Empirical heuristic: P50 is generally much higher than expiration POP
+    p50 = min(99.0, pop + ((100 - pop) * 0.4))
+    return f"{pop:.1f}%", f"{p50:.1f}%"
 
 # --- TECHNICAL INDICATORS ---
 def calculate_rsi(data, periods=14):
@@ -243,7 +255,7 @@ def fetch_macro_data():
     try:
         url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0',
             'Accept': 'application/json, text/plain, */*',
             'Referer': 'https://www.cnn.com/',
             'Origin': 'https://www.cnn.com/',
@@ -335,7 +347,6 @@ col1, col2 = st.columns([1, 3])
 with col1:
     if st.button("🚀 UPDATE MASTER VAULT", use_container_width=True, type="primary"):
         st.session_state.vault.clear()
-        # The restrictor plate is off. No time.sleep() needed for Tradier!
         with st.spinner(f"Downloading institutional options data for {len(selected_tickers)} tickers..."):
             for sym in selected_tickers:
                 st.session_state.vault[sym] = fetch_vault_payload(sym, selected_date_str)
@@ -352,7 +363,8 @@ with col2:
     else:
         st.warning("⚠️ Vault is empty. Select your Bench and Expiration Date, then click Update Master Vault.")
 
-tab_scanner, tab_deepdive = st.tabs(["🛡️ Option Scanner", "🔬 Technical Deep Dive"])
+# --- TABS INCLUDING NEW FINANCIALS TAB ---
+tab_scanner, tab_deepdive, tab_financials = st.tabs(["🛡️ Option Scanner", "🔬 Technical Deep Dive", "🏛️ Corporate Fundamentals"])
 
 with tab_scanner:
     if not st.session_state.vault:
@@ -386,13 +398,13 @@ with tab_scanner:
             
             atm_iv_display, ivr, max_pain, pc_ratio = "N/A", "N/A", "N/A", "N/A"
             put_strike, call_strike, put_trip, call_trip = None, None, "N/A", "N/A"
+            put_pop, put_p50, call_pop, call_p50, expected_move_val = "N/A", "N/A", "N/A", "N/A", 0.0
             
             calls = v_data["calls"]
             puts = v_data["puts"]
             target_date = v_data["snap_date"]
             
             if calls is not None and puts is not None and not calls.empty:
-                # Grab the 3 closest strikes and average them for a robust IV reading
                 calls['strike_dist'] = (calls['strike'] - current_price).abs()
                 closest_calls = calls.nsmallest(3, 'strike_dist')
                 valid_ivs = closest_calls[closest_calls['impliedVolatility'] > 0.01]['impliedVolatility']
@@ -400,15 +412,21 @@ with tab_scanner:
                 if not valid_ivs.empty:
                     atm_iv_raw = float(valid_ivs.mean())
                     atm_iv_display = f"{atm_iv_raw * 100:.1f}%"
-                    
                     calc_ivr = calculate_ivr(hist_1y, atm_iv_raw)
-                    if isinstance(calc_ivr, (int, float)):
-                        ivr = f"{calc_ivr:.1f}"
+                    if isinstance(calc_ivr, (int, float)): ivr = f"{calc_ivr:.1f}"
+                    
+                    # Calculate Expected Move
+                    expected_move_val = calculate_expected_move(current_price, atm_iv_raw, dte)
                 
-                call_strike = find_delta_strikes(calls, current_price, dte, target_delta, 'call')
-                put_strike = find_delta_strikes(puts, current_price, dte, target_delta, 'put')
-                if call_strike: call_trip = f"${call_strike * 0.95:.2f}"
-                if put_strike: put_trip = f"${put_strike * 1.05:.2f}"
+                call_strike, call_delta = find_delta_strikes(calls, current_price, dte, target_delta, 'call')
+                put_strike, put_delta = find_delta_strikes(puts, current_price, dte, target_delta, 'put')
+                
+                if call_strike: 
+                    call_trip = f"${call_strike * 0.95:.2f}"
+                    call_pop, call_p50 = calculate_pop_metrics(call_delta)
+                if put_strike: 
+                    put_trip = f"${put_strike * 1.05:.2f}"
+                    put_pop, put_p50 = calculate_pop_metrics(put_delta)
             
             if calls is not None and puts is not None and not calls.empty and not puts.empty:
                 tot_put_oi, tot_call_oi = puts['openInterest'].sum(), calls['openInterest'].sum()
@@ -459,20 +477,15 @@ with tab_scanner:
                 with c5: st.markdown(custom_metric_box("Earnings Date", f"{earnings_date}", "Upcoming Catalyst", sub_color="#ffcc00" if earnings_veto else "#a6a6a6"), unsafe_allow_html=True)
                 
                 st.markdown("---")
-                st.caption("🛡️ Risk Underwriting Data")
-                u1, u2, u3 = st.columns(3)
-                with u1: st.markdown(custom_metric_box("Max Pain", f"{max_pain}", "Gravity point for Expiration", sub_color="#a6a6a6"), unsafe_allow_html=True)
-                with u2:
-                    pc_color, pc_sub = "#a6a6a6", "Neutral Flow"
-                    try:
-                        pcr = float(pc_ratio)
-                        if pcr > 1.2: pc_color, pc_sub = "#ff4b4b", "Heavy Bearish Flow"
-                        elif pcr < 0.8: pc_color, pc_sub = "#09ab3b", "Heavy Bullish Flow"
-                    except: pass
-                    st.markdown(custom_metric_box("P/C OI Ratio", f"{pc_ratio}", pc_sub, sub_color=pc_color), unsafe_allow_html=True)
-                with u3:
-                    div_color = "#ffcc00" if ex_div_veto else "#a6a6a6"
-                    st.markdown(custom_metric_box("Ex-Dividend", f"{ex_div_date}", "Early Assignment Risk" if ex_div_veto else "Upcoming Ex-Div Date", sub_color=div_color), unsafe_allow_html=True)
+                st.caption("🛡️ Probability Matrix & Risk Underwriting")
+                u1, u2, u3, u4 = st.columns(4)
+                with u1: 
+                    em_range = f"±${expected_move_val:.2f}" if expected_move_val > 0 else "N/A"
+                    em_sub = f"[{current_price - expected_move_val:.2f} to {current_price + expected_move_val:.2f}]" if expected_move_val > 0 else ""
+                    st.markdown(custom_metric_box("Expected Move", em_range, em_sub, val_color="#09ab3b"), unsafe_allow_html=True)
+                with u2: st.markdown(custom_metric_box(f"Put POP / P50", f"{put_pop}", f"P50: {put_p50}", sub_color="#a6a6a6"), unsafe_allow_html=True)
+                with u3: st.markdown(custom_metric_box(f"Call POP / P50", f"{call_pop}", f"P50: {call_p50}", sub_color="#a6a6a6"), unsafe_allow_html=True)
+                with u4: st.markdown(custom_metric_box("Max Pain", f"{max_pain}", f"P/C Ratio: {pc_ratio}", sub_color="#a6a6a6"), unsafe_allow_html=True)
 
                 st.markdown("---")
                 v1, v2, v3, v4 = st.columns(4)
@@ -486,6 +499,12 @@ with tab_scanner:
                 fig.add_trace(go.Scatter(x=hist.index, y=hist['Close'].ewm(span=8, adjust=False).mean(), line=dict(color='#ff9900', width=1.5, dash='dot'), name="8-EMA"))
                 if call_strike: fig.add_hline(y=float(call_strike), line_width=2, line_color="green", annotation_text=f"{target_delta}Δ Call")
                 if put_strike: fig.add_hline(y=float(put_strike), line_width=2, line_color="red", annotation_text=f"{target_delta}Δ Put")
+                
+                # Add Expected Move Range bounds
+                if expected_move_val > 0:
+                    fig.add_hline(y=current_price + expected_move_val, line_width=1, line_dash="dash", line_color="rgba(255,255,255,0.3)", annotation_text="+1 EM")
+                    fig.add_hline(y=current_price - expected_move_val, line_width=1, line_dash="dash", line_color="rgba(255,255,255,0.3)", annotation_text="-1 EM")
+
                 fig.update_layout(template="plotly_dark", height=400, margin=dict(l=0, r=0, t=30, b=0), xaxis_rangeslider_visible=False)
                 st.plotly_chart(fig, use_container_width=True)
 # --- END OF PART 4 ---
@@ -499,7 +518,6 @@ with tab_deepdive:
     if deep_ticker:
         with st.spinner(f"Running Quant analysis on {deep_ticker}..."):
             try:
-                # Manual live pull for Deep Dive
                 t_dd = yf.Ticker(deep_ticker)
                 hist_dd = t_dd.history(period="1y")
                 
@@ -577,7 +595,6 @@ with tab_deepdive:
                     if rsi_14_dd > 70: mom_status, mom_text = "🔥 **Overbought:**", f"RSI running hot ({rsi_14_dd:.1f})."
                     elif rsi_14_dd < 30: mom_status, mom_text = "🧊 **Oversold:**", f"RSI indicates punishment ({rsi_14_dd:.1f})."
                     else: mom_status, mom_text = "⚖️ **Neutral Momentum:**", f"RSI balanced ({rsi_14_dd:.1f})."
-                    if adx_14_dd > 25: mom_text += f" ADX is high ({adx_14_dd:.1f}), confirming trend."
 
                     struct_text = f"POC located at **{poc_dd}**. "
                     if sup1_dd != "Freefall (None)": struct_text += f"Support floor around **{sup1_dd}**. "
@@ -590,10 +607,6 @@ with tab_deepdive:
 
                     sqz_status, sqz_text = ("🚨 **High Squeeze Risk:**", f"**{short_pct*100:.1f}%** float sold short.") if short_pct > 0.10 else ("✅ **Low Squeeze Risk:**", f"Minimal short interest ({short_pct*100:.1f}%).")
                     
-                    implied_14d_move = dd_price * (atm_iv_dd * np.sqrt(14 / 365))
-                    if (atr_14 * np.sqrt(14)) > (implied_14d_move * 1.15): fat_status, fat_text = "⚠️ **Fat Tail Risk:**", "Historical swings outpace options pricing. Widen strikes."
-                    else: fat_status, fat_text = "✅ **Expected Distribution:**", "Swings within options bounds."
-
                     st.markdown("---")
                     st.subheader(f"Underwriting Translation for {deep_ticker}")
                     col1, col2 = st.columns([1, 1])
@@ -603,7 +616,7 @@ with tab_deepdive:
                         st.markdown("#### ⚖️ 2. Premium Context")
                         st.markdown(f"{vol_status} {vol_text}"); st.markdown(f"{liq_status} {liq_text}"); st.markdown(f"{skew_status} {skew_text}")
                         st.markdown("#### 🛡️ 3. Tail Risk")
-                        st.markdown(f"{sqz_status} {sqz_text}"); st.markdown(f"{fat_status} {fat_text}")
+                        st.markdown(f"{sqz_status} {sqz_text}")
                     with col2:
                         fig_dd = go.Figure(data=[go.Candlestick(x=hist_6mo.index, open=hist_6mo['Open'], high=hist_6mo['High'], low=hist_6mo['Low'], close=hist_6mo['Close'], name="Price")])
                         fig_dd.update_layout(template="plotly_dark", height=300, margin=dict(l=0, r=0, t=10, b=0), xaxis_rangeslider_visible=False)
@@ -611,3 +624,76 @@ with tab_deepdive:
                         if oi_fig: st.plotly_chart(oi_fig, use_container_width=True)
             except Exception as e: st.error(f"Error analyzing {deep_ticker}: {str(e)}")
 # --- END OF PART 5 ---
+# --- START OF PART 6: FINANCIAL FUNDAMENTALS ---
+with tab_financials:
+    st.markdown("### 🏛️ Corporate Fundamentals Engine")
+    st.write("Scan a ticker to graph its Income Statement and Cash Flow health over the last 4 years using the `yfinance` framework.")
+    
+    fin_ticker = st.text_input("Enter Ticker for Fundamentals (e.g., AAPL, NVDA):", key="fin_ticker").upper().strip()
+    
+    if fin_ticker:
+        with st.spinner(f"Pulling SEC Filings for {fin_ticker}..."):
+            try:
+                fin_t = yf.Ticker(fin_ticker)
+                info = fin_t.info
+                
+                # Retrieve Financial Statements
+                inc_stmt = fin_t.financials
+                cash_flow = fin_t.cashflow
+                
+                if inc_stmt.empty:
+                    st.warning(f"No fundamental data available for {fin_ticker}. It may be an ETF (like SPY) or index.")
+                else:
+                    # Parse Key Metrics (ensure columns are sorted chronologically)
+                    inc_stmt = inc_stmt[inc_stmt.columns[::-1]] 
+                    cash_flow = cash_flow[cash_flow.columns[::-1]]
+                    
+                    years = [str(date)[:4] for date in inc_stmt.columns]
+                    
+                    # Safely extract rows (handling missing data in yfinance)
+                    def safe_extract(df, row_name):
+                        try: return df.loc[row_name].fillna(0).values / 1e9 # Convert to Billions
+                        except: return np.zeros(len(years))
+
+                    revenue = safe_extract(inc_stmt, 'Total Revenue')
+                    net_income = safe_extract(inc_stmt, 'Net Income')
+                    fcf = safe_extract(cash_flow, 'Free Cash Flow')
+
+                    st.markdown("---")
+                    
+                    # Key Ratios Row
+                    st.subheader(f"{info.get('shortName', fin_ticker)} | Key Valuation Metrics")
+                    r1, r2, r3, r4 = st.columns(4)
+                    
+                    pe = info.get('trailingPE', 'N/A')
+                    fwd_pe = info.get('forwardPE', 'N/A')
+                    pb = info.get('priceToBook', 'N/A')
+                    dte_ratio = info.get('debtToEquity', 'N/A')
+                    
+                    def fmt(val): return f"{val:.2f}" if isinstance(val, (int, float)) else val
+                    
+                    with r1: st.markdown(custom_metric_box("Trailing P/E", fmt(pe), "Price to Earnings", val_color="#ffcc00"), unsafe_allow_html=True)
+                    with r2: st.markdown(custom_metric_box("Forward P/E", fmt(fwd_pe), "Est. Future P/E", val_color="#ffcc00"), unsafe_allow_html=True)
+                    with r3: st.markdown(custom_metric_box("Price to Book", fmt(pb), "P/B Ratio"), unsafe_allow_html=True)
+                    with r4: st.markdown(custom_metric_box("Debt to Equity", fmt(dte_ratio), "Leverage Ratio", sub_color="#ff4b4b" if (isinstance(dte_ratio, (int, float)) and dte_ratio > 100) else "#09ab3b"), unsafe_allow_html=True)
+                    
+                    st.markdown("---")
+                    
+                    # Charting
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        fig_inc = go.Figure()
+                        fig_inc.add_trace(go.Bar(x=years, y=revenue, name="Total Revenue", marker_color="#09ab3b"))
+                        fig_inc.add_trace(go.Bar(x=years, y=net_income, name="Net Income", marker_color="#3498db"))
+                        fig_inc.update_layout(title="Income Statement (Billions USD)", template="plotly_dark", barmode='group', height=400)
+                        st.plotly_chart(fig_inc, use_container_width=True)
+                        
+                    with col2:
+                        fig_cf = go.Figure()
+                        fig_cf.add_trace(go.Bar(x=years, y=fcf, name="Free Cash Flow", marker_color="#ff9900"))
+                        fig_cf.update_layout(title="Free Cash Flow (Billions USD)", template="plotly_dark", height=400)
+                        st.plotly_chart(fig_cf, use_container_width=True)
+                        
+            except Exception as e:
+                st.error(f"Error retrieving fundamentals for {fin_ticker}: {str(e)}")
+# --- END OF PART 6 ---
