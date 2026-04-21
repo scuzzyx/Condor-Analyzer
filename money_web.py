@@ -1,4 +1,4 @@
-# --- START OF PART 1: SETUP & MATH ENGINES ---
+# --- START OF PART 1: IMPORTS & INIT ---
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -20,8 +20,8 @@ if "vault_time" not in st.session_state:
     st.session_state.vault_time = None
 if "vault_params" not in st.session_state:
     st.session_state.vault_params = ""
-
-# --- BLACK-SCHOLES DELTA ENGINE & PROBABILITIES ---
+# --- END OF PART 1 ---
+# --- START OF PART 2: BLACK-SCHOLES ENGINE ---
 def calculate_delta(S, K, T, r, sigma, option_type='call'):
     if T <= 0 or sigma <= 0: return 0.5
     d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
@@ -46,11 +46,10 @@ def calculate_expected_move(price, iv, dte):
 def calculate_pop_metrics(delta_val):
     if pd.isna(delta_val): return "N/A", "N/A"
     pop = (1 - abs(delta_val)) * 100
-    # Empirical heuristic: P50 is generally much higher than expiration POP
     p50 = min(99.0, pop + ((100 - pop) * 0.4))
     return f"{pop:.1f}%", f"{p50:.1f}%"
-
-# --- TECHNICAL INDICATORS ---
+# --- END OF PART 2 ---
+# --- START OF PART 3: TECHNICAL INDICATORS ---
 def calculate_rsi(data, periods=14):
     delta = data.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=periods).mean()
@@ -112,114 +111,8 @@ def get_pure_fridays(weeks=26):
 
 def custom_metric_box(label, value, sub_value, val_color="#FAFAFA", sub_color="#a6a6a6"):
     return f'<div style="line-height: 1.4; margin-bottom: 14px;"><span style="font-size: 0.85rem; color: #a6a6a6; font-family: sans-serif;">{label}</span><br><span style="font-size: 1.8rem; font-weight: 600; color: {val_color}; font-family: sans-serif;">{value}</span><br><span style="font-size: 0.9rem; font-weight: 500; color: {sub_color}; font-family: sans-serif;">{sub_value}</span></div>'
-# --- END OF PART 1 ---
-# --- START OF PART 2: VAULT ENGINES & SCRAPERS ---
-def fetch_vault_payload(symbol, target_date):
-    """Pulls options data and history using Tradier, with built-in diagnostics."""
-    try:
-        headers = {
-            "Authorization": f"Bearer {st.secrets['TRADIER_API_KEY'].strip()}",
-            "Accept": "application/json"
-        }
-        
-        # 1. Fetch History 
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=365)
-        hist_url = f"https://api.tradier.com/v1/markets/history?symbol={symbol}&start={start_date.strftime('%Y-%m-%d')}&end={end_date.strftime('%Y-%m-%d')}"
-        hist_resp = requests.get(hist_url, headers=headers)
-        
-        if hist_resp.status_code != 200:
-            st.error(f"Tradier History Blocked [{symbol}]: Code {hist_resp.status_code} | {hist_resp.text}")
-            
-        hist_df = pd.DataFrame()
-        if hist_resp.status_code == 200:
-            hist_data = hist_resp.json()
-            if 'history' in hist_data and hist_data['history'] and 'day' in hist_data['history']:
-                day_data = hist_data['history']['day']
-                if isinstance(day_data, dict): day_data = [day_data]
-                hist_df = pd.DataFrame(day_data)
-                if not hist_df.empty:
-                    hist_df['Date'] = pd.to_datetime(hist_df['date'])
-                    hist_df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}, inplace=True)
-                    hist_df.set_index('Date', inplace=True)
-                    
-        # Fallback to yfinance if Tradier history is completely empty
-        if hist_df.empty:
-            hist_df = yf.Ticker(symbol).history(period="1y")
-
-        # 2. Fetch Options Expirations
-        exp_url = f"https://api.tradier.com/v1/markets/options/expirations?symbol={symbol}"
-        exp_resp = requests.get(exp_url, headers=headers)
-        
-        if exp_resp.status_code != 200:
-             st.error(f"Tradier Expirations Blocked [{symbol}]: Code {exp_resp.status_code} | {exp_resp.text}")
-             
-        snap_date = target_date
-        if exp_resp.status_code == 200:
-            exp_data = exp_resp.json()
-            if 'expirations' in exp_data and exp_data['expirations'] and 'date' in exp_data['expirations']:
-                dates = exp_data['expirations']['date']
-                if isinstance(dates, str): dates = [dates]
-                target_dt = datetime.strptime(target_date, '%Y-%m-%d')
-                valid_dts = [datetime.strptime(d, '%Y-%m-%d') for d in dates]
-                if valid_dts:
-                    snap_date = min(valid_dts, key=lambda d: abs(d - target_dt)).strftime('%Y-%m-%d')
-
-        # 3. Fetch Option Chain 
-        chain_url = f"https://api.tradier.com/v1/markets/options/chains?symbol={symbol}&expiration={snap_date}&greeks=true"
-        chain_resp = requests.get(chain_url, headers=headers)
-        
-        if chain_resp.status_code != 200:
-             st.error(f"Tradier Chain Blocked [{symbol}]: Code {chain_resp.status_code} | {chain_resp.text}")
-             
-        calls_list, puts_list = [], []
-        if chain_resp.status_code == 200:
-            chain_data = chain_resp.json()
-            if 'options' in chain_data and chain_data['options'] and 'option' in chain_data['options']:
-                options_data = chain_data['options']['option']
-                if isinstance(options_data, dict): options_data = [options_data]
-                
-                for opt in options_data:
-                    greeks = opt.get('greeks')
-                    iv = 0.3
-                    if isinstance(greeks, dict):
-                        iv = greeks.get('mid_iv') or greeks.get('smv_vol') or 0.3
-                        
-                    row = {
-                        'strike': float(opt.get('strike') or 0.0),
-                        'openInterest': int(opt.get('open_interest') or 0),
-                        'volume': int(opt.get('volume') or 0),
-                        'impliedVolatility': float(iv)
-                    }
-                    if opt.get('option_type') == 'call':
-                        calls_list.append(row)
-                    elif opt.get('option_type') == 'put':
-                        puts_list.append(row)
-
-        calls = pd.DataFrame(calls_list)
-        puts = pd.DataFrame(puts_list)
-
-        # 4. Use yfinance purely for Company Info
-        t = yf.Ticker(symbol)
-        try:
-            info = t.info
-            calendar = t.calendar
-        except:
-            info = {}
-            calendar = None
-
-        return {
-            "history": hist_df,
-            "info": info,
-            "calendar": calendar,
-            "calls": calls,
-            "puts": puts,
-            "snap_date": snap_date
-        }
-    except Exception as e:
-        st.error(f"Python Processing Error for {symbol}: {str(e)}")
-        return None
-
+# --- END OF PART 3 ---
+# --- START OF PART 4: SCRAPERS & MACRO ---
 @st.cache_data(ttl=3600)
 def run_premium_hunter(ticker_list):
     targets = []
@@ -254,8 +147,9 @@ def fetch_macro_data():
     
     try:
         url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
+        # Restored the full User-Agent to bypass CNN blocking
         headers = {
-            'User-Agent': 'Mozilla/5.0',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
             'Accept': 'application/json, text/plain, */*',
             'Referer': 'https://www.cnn.com/',
             'Origin': 'https://www.cnn.com/',
@@ -270,8 +164,97 @@ def fetch_macro_data():
     except: pass
     
     return vix_val, vix_pct, fg_val, fg_rating
-# --- END OF PART 2 ---
-# --- START OF PART 3: SIDEBAR UI ---
+# --- END OF PART 4 ---
+# --- START OF PART 5: TRADIER VAULT PAYLOAD ---
+def fetch_vault_payload(symbol, target_date):
+    """Pulls options data and history using Tradier, with built-in diagnostics."""
+    try:
+        headers = {
+            "Authorization": f"Bearer {st.secrets['TRADIER_API_KEY'].strip()}",
+            "Accept": "application/json"
+        }
+        
+        # 1. Fetch History 
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=365)
+        hist_url = f"https://api.tradier.com/v1/markets/history?symbol={symbol}&start={start_date.strftime('%Y-%m-%d')}&end={end_date.strftime('%Y-%m-%d')}"
+        hist_resp = requests.get(hist_url, headers=headers)
+        
+        if hist_resp.status_code != 200:
+            st.error(f"Tradier History Blocked [{symbol}]: Code {hist_resp.status_code} | {hist_resp.text}")
+            
+        hist_df = pd.DataFrame()
+        if hist_resp.status_code == 200:
+            hist_data = hist_resp.json()
+            if 'history' in hist_data and hist_data['history'] and 'day' in hist_data['history']:
+                day_data = hist_data['history']['day']
+                if isinstance(day_data, dict): day_data = [day_data]
+                hist_df = pd.DataFrame(day_data)
+                if not hist_df.empty:
+                    hist_df['Date'] = pd.to_datetime(hist_df['date'])
+                    hist_df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}, inplace=True)
+                    hist_df.set_index('Date', inplace=True)
+                    
+        # Fallback to yfinance
+        if hist_df.empty:
+            hist_df = yf.Ticker(symbol).history(period="1y")
+
+        # 2. Fetch Options Expirations
+        exp_url = f"https://api.tradier.com/v1/markets/options/expirations?symbol={symbol}"
+        exp_resp = requests.get(exp_url, headers=headers)
+        
+        snap_date = target_date
+        if exp_resp.status_code == 200:
+            exp_data = exp_resp.json()
+            if 'expirations' in exp_data and exp_data['expirations'] and 'date' in exp_data['expirations']:
+                dates = exp_data['expirations']['date']
+                if isinstance(dates, str): dates = [dates]
+                target_dt = datetime.strptime(target_date, '%Y-%m-%d')
+                valid_dts = [datetime.strptime(d, '%Y-%m-%d') for d in dates]
+                if valid_dts:
+                    snap_date = min(valid_dts, key=lambda d: abs(d - target_dt)).strftime('%Y-%m-%d')
+
+        # 3. Fetch Option Chain 
+        chain_url = f"https://api.tradier.com/v1/markets/options/chains?symbol={symbol}&expiration={snap_date}&greeks=true"
+        chain_resp = requests.get(chain_url, headers=headers)
+             
+        calls_list, puts_list = [], []
+        if chain_resp.status_code == 200:
+            chain_data = chain_resp.json()
+            if 'options' in chain_data and chain_data['options'] and 'option' in chain_data['options']:
+                options_data = chain_data['options']['option']
+                if isinstance(options_data, dict): options_data = [options_data]
+                
+                for opt in options_data:
+                    greeks = opt.get('greeks')
+                    iv = 0.3
+                    if isinstance(greeks, dict):
+                        iv = greeks.get('mid_iv') or greeks.get('smv_vol') or 0.3
+                        
+                    row = {
+                        'strike': float(opt.get('strike') or 0.0),
+                        'openInterest': int(opt.get('open_interest') or 0),
+                        'volume': int(opt.get('volume') or 0),
+                        'impliedVolatility': float(iv)
+                    }
+                    if opt.get('option_type') == 'call': calls_list.append(row)
+                    elif opt.get('option_type') == 'put': puts_list.append(row)
+
+        calls, puts = pd.DataFrame(calls_list), pd.DataFrame(puts_list)
+
+        # 4. Use yfinance purely for Company Info
+        t = yf.Ticker(symbol)
+        try:
+            info, calendar = t.info, t.calendar
+        except:
+            info, calendar = {}, None
+
+        return {"history": hist_df, "info": info, "calendar": calendar, "calls": calls, "puts": puts, "snap_date": snap_date}
+    except Exception as e:
+        st.error(f"Python Processing Error for {symbol}: {str(e)}")
+        return None
+# --- END OF PART 5 ---
+# --- START OF PART 6: SIDEBAR UI ---
 st.sidebar.header("🛠️ Dashboard Controls")
 
 vix_v, vix_p, fg_v, fg_r = fetch_macro_data()
@@ -328,8 +311,8 @@ if st.sidebar.button("Scan for High Premium"):
             for t in targets: st.sidebar.write(f"- **{t}**")
         else: 
             st.sidebar.warning("Volatility is dead. No elevated IV environments found.")
-# --- END OF PART 3 ---
-# --- START OF PART 4: VAULT TRIGGER & SCANNER ---
+# --- END OF PART 6 ---
+# --- START OF PART 7: VAULT TRIGGER & TABS ---
 st.markdown("---")
 with st.expander("📖 Terminal Indicator Glossary (Quick Reference)", expanded=False):
     st.subheader("🚦 Title Risk & Veto Signals")
@@ -342,7 +325,6 @@ with st.expander("📖 Terminal Indicator Glossary (Quick Reference)", expanded=
     st.write("- **🟢 *FLOOR CONFIRMED*:** 8-EMA Reclaimed. Consider Put Spreads only.")
     st.write("- **🟢 *NEUTRAL CHOP*:** Ideal sideways environment for Iron Condors.")
 
-# THE MANUAL VAULT TRIGGER
 col1, col2 = st.columns([1, 3])
 with col1:
     if st.button("🚀 UPDATE MASTER VAULT", use_container_width=True, type="primary"):
@@ -363,16 +345,15 @@ with col2:
     else:
         st.warning("⚠️ Vault is empty. Select your Bench and Expiration Date, then click Update Master Vault.")
 
-# --- TABS INCLUDING NEW FINANCIALS TAB ---
 tab_scanner, tab_deepdive, tab_financials = st.tabs(["🛡️ Option Scanner", "🔬 Technical Deep Dive", "🏛️ Corporate Fundamentals"])
-
+# --- END OF PART 7 ---
+# --- START OF PART 8: SCANNER DATA LOOP ---
 with tab_scanner:
     if not st.session_state.vault:
         st.info("Awaiting Vault Data...")
     else:
         for symbol in selected_tickers:
             if symbol not in st.session_state.vault or not st.session_state.vault[symbol]:
-                st.error(f"Failed to load data for {symbol} into Vault.")
                 continue
                 
             v_data = st.session_state.vault[symbol]
@@ -415,7 +396,6 @@ with tab_scanner:
                     calc_ivr = calculate_ivr(hist_1y, atm_iv_raw)
                     if isinstance(calc_ivr, (int, float)): ivr = f"{calc_ivr:.1f}"
                     
-                    # Calculate Expected Move
                     expected_move_val = calculate_expected_move(current_price, atm_iv_raw, dte)
                 
                 call_strike, call_delta = find_delta_strikes(calls, current_price, dte, target_delta, 'call')
@@ -467,7 +447,8 @@ with tab_scanner:
 
             risk = base_risk + (" [EARNINGS SOON]" if earnings_veto else "") + (" ⚠️[EX-DIVIDEND DANGER]" if ex_div_veto else "")
             ivr_color = "#09ab3b" if (isinstance(ivr, str) and ivr != "N/A" and float(ivr) > 50) else "#a6a6a6"
-
+# --- END OF PART 8 ---
+# --- START OF PART 9: SCANNER UI BUILDER ---
             with st.expander(f"{symbol} | Price: ${current_price:.2f} | Target Chain: {target_date} | Risk: {risk}", expanded=False):
                 c1, c2, c3, c4, c5 = st.columns(5)
                 with c1: st.markdown(custom_metric_box("Today's Change", f"${current_price:.2f}", f"{change_dlr:+.2f} ({change_pct:+.2f}%)", sub_color=change_color), unsafe_allow_html=True)
@@ -508,15 +489,14 @@ with tab_scanner:
                 if call_strike: fig.add_hline(y=float(call_strike), line_width=2, line_color="green", annotation_text=f"{target_delta}Δ Call")
                 if put_strike: fig.add_hline(y=float(put_strike), line_width=2, line_color="red", annotation_text=f"{target_delta}Δ Put")
                 
-                # Add Expected Move Range bounds
                 if expected_move_val > 0:
                     fig.add_hline(y=current_price + expected_move_val, line_width=1, line_dash="dash", line_color="rgba(255,255,255,0.3)", annotation_text="+1 EM")
                     fig.add_hline(y=current_price - expected_move_val, line_width=1, line_dash="dash", line_color="rgba(255,255,255,0.3)", annotation_text="-1 EM")
 
                 fig.update_layout(template="plotly_dark", height=400, margin=dict(l=0, r=0, t=30, b=0), xaxis_rangeslider_visible=False)
                 st.plotly_chart(fig, use_container_width=True)
-# --- END OF PART 4 ---
-# --- START OF PART 5: DEEP DIVE ---
+# --- END OF PART 9 ---
+# --- START OF PART 10: DEEP DIVE QUANT ---
 with tab_deepdive:
     st.markdown("### 🔬 Automated Quantitative Analyst")
     st.write("Enter a single ticker below. The system will pull fresh data to process the underlying mathematics, liquidity, and tail risks to translate the chart structure into plain English.")
@@ -631,8 +611,8 @@ with tab_deepdive:
                         st.plotly_chart(fig_dd, use_container_width=True)
                         if oi_fig: st.plotly_chart(oi_fig, use_container_width=True)
             except Exception as e: st.error(f"Error analyzing {deep_ticker}: {str(e)}")
-# --- END OF PART 5 ---
-# --- START OF PART 6: FINANCIAL FUNDAMENTALS ---
+# --- END OF PART 10 ---
+# --- START OF PART 11: FINANCIAL FUNDAMENTALS ---
 with tab_financials:
     st.markdown("### 🏛️ Corporate Fundamentals Engine")
     st.write("Scan a ticker to graph its Income Statement and Cash Flow health over the last 4 years using the `yfinance` framework.")
@@ -704,4 +684,4 @@ with tab_financials:
                         
             except Exception as e:
                 st.error(f"Error retrieving fundamentals for {fin_ticker}: {str(e)}")
-# --- END OF PART 6 ---
+# --- END OF PART 11 (END OF SCRIPT) ---
