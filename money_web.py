@@ -146,8 +146,10 @@ def fetch_tradier_1m(symbol):
     now_ny = datetime.now(ny_tz)
     
     start_dt = now_ny - timedelta(days=4) 
-    start_str = start_dt.strftime('%Y-%m-%d')
-    end_str = now_ny.strftime('%Y-%m-%d')
+    
+    # STRICT TIME FIX: Appending hours/minutes to prevent the API from cutting off at midnight
+    start_str = start_dt.strftime('%Y-%m-%d 00:00')
+    end_str = now_ny.strftime('%Y-%m-%d 23:59')
     
     url = f"https://api.tradier.com/v1/markets/timesales?symbol={symbol}&interval=1min&session_filter=open&start={start_str}&end={end_str}"
     
