@@ -586,16 +586,50 @@ with tab_scanner:
                 fig.update_layout(template="plotly_dark", height=500, margin=dict(l=0, r=0, t=30, b=0), xaxis_rangeslider_visible=False)
                 st.plotly_chart(fig, use_container_width=True)
 
-# --- START OF PART 10: INTRADAY SNIPER (NEW TRADIER ENGINE) ---
+# --- START OF PART 10: INTRADAY SNIPER (UPGRADED QUANT ENGINE) ---
 with tab_intraday:
     if target_ticker:
-        with st.spinner(f"Acquiring Intraday & Options Data from Tradier for {target_ticker}..."):
+        with st.spinner(f"Acquiring Institutional Tape & Volume Profiles for {target_ticker}..."):
+            _, hist_dd = fetch_tradier_history(target_ticker)
             _, df_intraday = fetch_tradier_1m(target_ticker)
             
             if df_intraday.empty:
                 st.error(f"Could not fetch 1-minute intraday data for {target_ticker}. The market might be closed or the ticker is invalid.")
             else:
-                # 1. Price Action & Trend Calculation
+                # 1. Structural Daily Pivots (PDH, PDL) & Avg Vol Calculation
+                pdh, pdl, pdc = None, None, None
+                avg_daily_vol = 1
+                if not hist_dd.empty:
+                    ny_tz = pytz.timezone('US/Eastern')
+                    today_date = datetime.now(ny_tz).date()
+                    hist_past = hist_dd[hist_dd.index.date < today_date]
+                    if not hist_past.empty:
+                        pdh = float(hist_past['High'].iloc[-1])
+                        pdl = float(hist_past['Low'].iloc[-1])
+                        pdc = float(hist_past['Close'].iloc[-1])
+                    avg_daily_vol = hist_dd['Volume'].tail(20).mean()
+
+                # 2. RVOL (Relative Volume) Calculation
+                now_ny = datetime.now(ny_tz)
+                market_open = now_ny.replace(hour=9, minute=30, second=0, microsecond=0)
+                minutes_elapsed = max(1, (now_ny - market_open).total_seconds() / 60)
+                minutes_elapsed = min(minutes_elapsed, 390) 
+                
+                today_vol = df_intraday['Volume'].sum()
+                expected_vol = avg_daily_vol * (minutes_elapsed / 390)
+                rvol = today_vol / expected_vol if expected_vol > 0 else 0
+
+                rvol_status = "🔥 HIGH" if rvol > 1.5 else "🧊 LOW" if rvol < 0.8 else "⚖️ NORMAL"
+                rvol_color = "#ff9900" if rvol > 1.5 else "#a6a6a6"
+
+                # 3. ORB (15-Minute Opening Range Breakout)
+                orb_high, orb_low = None, None
+                orb_df = df_intraday.between_time('09:30', '09:44')
+                if not orb_df.empty:
+                    orb_high = float(orb_df['High'].max())
+                    orb_low = float(orb_df['Low'].min())
+
+                # 4. Price Action & Trend Calculation
                 df_intraday = calculate_vwap(df_intraday)
                 df_intraday['EMA_8'] = df_intraday['Close'].ewm(span=8, adjust=False).mean()
                 
@@ -607,7 +641,7 @@ with tab_intraday:
                 price_color = "#09ab3b" if curr_price_intra >= open_price else "#ff4b4b"
                 vwap_rel = ((curr_price_intra - current_vwap) / current_vwap) * 100
                 
-                # 2. Options Volume Flow Calculation via Tradier
+                # 5. Options Volume Flow Calculation via Tradier
                 calls_intra, puts_intra, exp_date_intra = fetch_tradier_intraday_options(target_ticker)
                 pcr_vol, implied_move = "N/A", 0.0
                 pcr_score = 0
@@ -625,43 +659,58 @@ with tab_intraday:
                         iv_intra = atm_call_intra['impliedVolatility'].values[0]
                         implied_move = curr_price_intra * iv_intra * np.sqrt(1/365.0)
 
-                # 3. The Conviction Engine (Scoring -3 to +3)
+                # 6. The Expanded Conviction Engine (Scoring -4 to +4)
                 score = 0
                 score += 1 if curr_price_intra > current_vwap else -1 
                 score += 1 if curr_price_intra > curr_ema8 else -1     
                 score += pcr_score                                     
 
-                if score == 3: signal, sig_col = "🟢 HIGH CONVICTION LONG", "#09ab3b"
-                elif score >= 1: signal, sig_col = "🟡 LEANING LONG (Scalp)", "#ffcc00"
-                elif score <= -1 and score > -3: signal, sig_col = "🟡 LEANING SHORT (Scalp)", "#ffcc00"
-                elif score == -3: signal, sig_col = "🔴 HIGH CONVICTION SHORT", "#ff4b4b"
+                # ORB Factor
+                orb_status = "Inside Range"
+                if orb_high and curr_price_intra > orb_high:
+                    score += 1
+                    orb_status = "Bull Breakout"
+                elif orb_low and curr_price_intra < orb_low:
+                    score += -1
+                    orb_status = "Bear Breakdown"
+
+                if score >= 3: signal, sig_col = "🟢 HIGH CONVICTION LONG", "#09ab3b"
+                elif score in [1, 2]: signal, sig_col = "🟡 LEANING LONG (Scalp)", "#ffcc00"
+                elif score in [-1, -2]: signal, sig_col = "🟡 LEANING SHORT (Scalp)", "#ffcc00"
+                elif score <= -3: signal, sig_col = "🔴 HIGH CONVICTION SHORT", "#ff4b4b"
                 else: signal, sig_col = "⚪ NEUTRAL / CHOP ZONE", "#a6a6a6"
 
-                # 4. UI Render
+                # 7. UI Render
                 st.markdown(f"### {target_ticker} | Intraday Profile")
                 
                 # Dynamic Conviction Banner
-                st.markdown(f"<div style='text-align: center; padding: 15px; background-color: #1e1e1e; border: 2px solid {sig_col}; border-radius: 8px; margin-bottom: 20px;'><h3 style='color: {sig_col}; margin: 0;'>{signal}</h3><span style='color: #a6a6a6;'>Algo Score: {score}/3 | PCR: {pcr_vol if isinstance(pcr_vol, str) else round(pcr_vol, 2)} | VWAP Rel: {vwap_rel:+.2f}%</span></div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='text-align: center; padding: 15px; background-color: #1e1e1e; border: 2px solid {sig_col}; border-radius: 8px; margin-bottom: 20px;'><h3 style='color: {sig_col}; margin: 0;'>{signal}</h3><span style='color: #a6a6a6;'>Algo Score: {score}/4 | PCR: {pcr_vol if isinstance(pcr_vol, str) else round(pcr_vol, 2)} | VWAP Rel: {vwap_rel:+.2f}% | RVOL: {rvol:.2f}</span></div>", unsafe_allow_html=True)
 
                 m1, m2, m3, m4 = st.columns(4)
-                with m1: st.markdown(intraday_metric("Last Price", f"${curr_price_intra:.2f}", f"Open: ${open_price:.2f}", val_color=price_color), unsafe_allow_html=True)
-                with m2: st.markdown(intraday_metric("Intraday VWAP", f"${current_vwap:.2f}", f"8-EMA: ${curr_ema8:.2f}", val_color="#ffcc00"), unsafe_allow_html=True)
+                with m1: st.markdown(intraday_metric("Last Price", f"${curr_price_intra:.2f}", f"ORB Status: {orb_status}", val_color=price_color), unsafe_allow_html=True)
+                with m2: st.markdown(intraday_metric("Relative Volume (RVOL)", f"{rvol:.2f}", rvol_status, val_color=rvol_color), unsafe_allow_html=True)
                 with m3:
                     pcr_val = f"{pcr_vol:.2f}" if isinstance(pcr_vol, float) else pcr_vol
                     pcr_col = "#ff4b4b" if isinstance(pcr_vol, float) and pcr_vol > 1.0 else "#09ab3b"
                     st.markdown(intraday_metric(f"Nearest Vol PCR ({exp_date_intra})", pcr_val, "Volume Put/Call Ratio", val_color=pcr_col), unsafe_allow_html=True)
                 with m4:
-                    move_str = f"±${implied_move:.2f}" if implied_move > 0 else "N/A"
-                    st.markdown(intraday_metric("1-Day Expected Move", move_str, "Based on ATM IV", val_color="#3498db"), unsafe_allow_html=True)
+                    pd_str = f"H: ${pdh:.2f} | L: ${pdl:.2f}" if pdh else "N/A"
+                    st.markdown(intraday_metric("Prior Day Bounds", pd_str, "Algorithmic Magnets", val_color="#3498db"), unsafe_allow_html=True)
 
                 fig_intra = go.Figure()
                 fig_intra.add_trace(go.Candlestick(x=df_intraday.index, open=df_intraday['Open'], high=df_intraday['High'], low=df_intraday['Low'], close=df_intraday['Close'], name="Price"))
                 fig_intra.add_trace(go.Scatter(x=df_intraday.index, y=df_intraday['VWAP'], line=dict(color='#ffcc00', width=2), name="VWAP"))
                 fig_intra.add_trace(go.Scatter(x=df_intraday.index, y=df_intraday['EMA_8'], line=dict(color='#00d4ff', width=1.5, dash='dot'), name="8-EMA"))
                 
-                if implied_move > 0:
-                    fig_intra.add_hline(y=open_price + implied_move, line_width=1, line_dash="dash", line_color="rgba(255,255,255,0.3)", annotation_text="+1 EM")
-                    fig_intra.add_hline(y=open_price - implied_move, line_width=1, line_dash="dash", line_color="rgba(255,255,255,0.3)", annotation_text="-1 EM")
+                # Plot ORB Levels
+                if orb_high and orb_low:
+                    fig_intra.add_hline(y=orb_high, line_width=1, line_dash="dash", line_color="rgba(9, 171, 59, 0.5)", annotation_text="ORB High")
+                    fig_intra.add_hline(y=orb_low, line_width=1, line_dash="dash", line_color="rgba(255, 75, 75, 0.5)", annotation_text="ORB Low")
+
+                # Plot Previous Day Levels
+                if pdh and pdl:
+                    fig_intra.add_hline(y=pdh, line_width=1.5, line_color="rgba(255, 255, 255, 0.2)", annotation_text="PD High")
+                    fig_intra.add_hline(y=pdl, line_width=1.5, line_color="rgba(255, 255, 255, 0.2)", annotation_text="PD Low")
 
                 fig_intra.update_layout(template="plotly_dark", height=550, margin=dict(l=0, r=0, t=30, b=0), xaxis_rangeslider_visible=False, showlegend=True, legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01))
                 st.plotly_chart(fig_intra, use_container_width=True)
@@ -669,8 +718,8 @@ with tab_intraday:
                 st.markdown("---")
                 with st.expander("📖 Intraday Algo Score & Indicator Glossary", expanded=False):
                     st.markdown("""
-                    ### 🧠 The Conviction Scoring Engine (-3 to +3)
-                    The algorithm aggregates three distinct data points to form a mechanical bias. Each bullish signal adds +1, and each bearish signal subtracts -1. 
+                    ### 🧠 The Conviction Scoring Engine (-4 to +4)
+                    The algorithm evaluates four structural conditions. Each bullish condition adds +1, and each bearish condition subtracts -1. 
                     
                     * **Condition 1: VWAP (Institutional Baseline)**
                         * **+1:** Price > VWAP (Buyers in control)
@@ -678,21 +727,24 @@ with tab_intraday:
                     * **Condition 2: 8-EMA (Micro Momentum)**
                         * **+1:** Price > 8-EMA (Short-term uptrend)
                         * **-1:** Price < 8-EMA (Short-term downtrend)
-                    * **Condition 3: Options Volume PCR (Smart Money Flow)**
+                    * **Condition 3: 15-Min ORB (Opening Range Breakout)**
+                        * **+1:** Price breaks above the high of the first 15 minutes.
+                        * **-1:** Price breaks below the low of the first 15 minutes.
+                    * **Condition 4: Options Volume PCR (Smart Money Flow)**
                         * **+1:** PCR < 0.85 (Heavy intraday Call buying)
                         * **-1:** PCR > 1.15 (Heavy intraday Put buying)
                         * *Note: If PCR is between 0.85 and 1.15, it awards 0 points (Neutral).*
                         
                     ### 🚦 Signal Translation
-                    * 🟢 **+3 (High Conviction Long):** Perfect bullish alignment. Price is riding momentum, holding above institutional support, and options buyers are fueling the move.
-                    * 🟡 **+1 to +2 (Leaning Long / Scalp):** Mixed but bullish. Often happens during consolidations above VWAP. Play small and keep a tight stop.
-                    * ⚪ **0 (Chop Zone):** Zero edge. Trend and flow are contradicting each other. Sit on your hands.
-                    * 🟡 **-1 to -2 (Leaning Short / Scalp):** Mixed but bearish. Support is cracking, but flow hasn't fully committed yet.
-                    * 🔴 **-3 (High Conviction Short):** Perfect bearish alignment. Total breakdown in price action confirmed by aggressive put buying.
+                    * 🟢 **+3 to +4 (High Conviction Long):** Perfect bullish alignment breaking out of the morning range.
+                    * 🟡 **+1 to +2 (Leaning Long / Scalp):** Mixed but bullish. Often occurs when chopping inside the ORB.
+                    * ⚪ **0 (Chop Zone):** Zero edge. Sit on your hands.
+                    * 🟡 **-1 to -2 (Leaning Short / Scalp):** Mixed but bearish. 
+                    * 🔴 **-3 to -4 (High Conviction Short):** Total breakdown confirmed by volume and range failure.
                     
-                    ### 📊 Additional Metrics
-                    * **VWAP Rel:** The exact percentage distance the current price is extended away from VWAP. Watch for mean-reversion (snap-backs) if this gets excessively high or low (e.g., > 1.5%).
-                    * **1-Day Expected Move:** Based on the immediate ATM Implied Volatility. Projects the statistical boundaries of today's price action measured from the morning's Open price.
+                    ### 📊 Veto Metrics & Guidelines
+                    * **Relative Volume (RVOL):** Compares today's volume to the historical average at this exact time. **Veto any setup if RVOL < 0.8**. You want RVOL > 1.5 for follow-through.
+                    * **Prior Day Magnets:** The chart now plots PD High and PD Low. **Never** initiate a short directly into PD Low, and **never** buy a breakout directly into PD High.
                     """)
 # --- END OF PART 10 ---
 
