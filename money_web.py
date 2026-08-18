@@ -138,6 +138,69 @@ def run_premium_hunter(ticker_list):
         return [f"{t[0]} (Rank: {t[1]:.0f})" for t in targets[:6]]
     except: return []
 
+@st.cache_data(ttl=300, show_spinner=False)
+def run_short_hunter(ticker_list):
+    targets = []
+    try:
+        # Bulk download 1-minute data to save time and API calls
+        bulk_intraday = yf.download(ticker_list, period="1d", interval="1m", progress=False)
+        
+        for sym in ticker_list:
+            try:
+                # 1. Verify Price Action Breakdown (Fast Check)
+                if 'Close' not in bulk_intraday or sym not in bulk_intraday['Close']:
+                    continue
+                    
+                df_sym = pd.DataFrame({
+                    'Open': bulk_intraday['Open'][sym],
+                    'High': bulk_intraday['High'][sym],
+                    'Low': bulk_intraday['Low'][sym],
+                    'Close': bulk_intraday['Close'][sym],
+                    'Volume': bulk_intraday['Volume'][sym]
+                }).dropna()
+                
+                if df_sym.empty: continue
+                
+                df_sym = calculate_vwap(df_sym)
+                df_sym['EMA_8'] = df_sym['Close'].ewm(span=8, adjust=False).mean()
+                
+                curr_price = df_sym['Close'].iloc[-1]
+                curr_vwap = df_sym['VWAP'].iloc[-1]
+                curr_ema8 = df_sym['EMA_8'].iloc[-1]
+                
+                score = 0
+                score += 1 if curr_price > curr_vwap else -1
+                score += 1 if curr_price > curr_ema8 else -1
+                
+                # If it's not already at -2 from price action, skip the slow options check
+                if score > -2:
+                    continue
+                    
+                # 2. Verify Options Flow Confirmation (Slow Check)
+                tkr = yf.Ticker(sym)
+                pcr_score = 0
+                exps = tkr.options
+                if exps:
+                    chain = tkr.option_chain(exps[0])
+                    c_vol = chain.calls['volume'].sum()
+                    p_vol = chain.puts['volume'].sum()
+                    if c_vol > 0:
+                        pcr = p_vol / c_vol
+                        if pcr > 1.15: pcr_score = -1
+                        elif pcr < 0.85: pcr_score = 1
+                        
+                score += pcr_score
+                
+                # 3. Add to targets if it hits perfect -3
+                if score == -3:
+                    targets.append(sym)
+            except:
+                continue
+                
+        return targets
+    except:
+        return []
+
 @st.cache_data(ttl=900, show_spinner=False)
 def fetch_macro_data():
     vix_val, vix_pct, fg_val, fg_rating = "N/A", "N/A", "N/A", "N/A"
@@ -230,525 +293,4 @@ def fetch_vault_payload(symbol, target_date):
                     greeks = opt.get('greeks')
                     iv = 0.3
                     if isinstance(greeks, dict):
-                        iv = greeks.get('mid_iv') or greeks.get('smv_vol') or 0.3
-                        
-                    row = {
-                        'strike': float(opt.get('strike') or 0.0),
-                        'openInterest': int(opt.get('open_interest') or 0),
-                        'volume': int(opt.get('volume') or 0),
-                        'impliedVolatility': float(iv)
-                    }
-                    if opt.get('option_type') == 'call': calls_list.append(row)
-                    elif opt.get('option_type') == 'put': puts_list.append(row)
-
-        calls, puts = pd.DataFrame(calls_list), pd.DataFrame(puts_list)
-
-        # 4. Use yfinance purely for Company Info
-        t = yf.Ticker(symbol)
-        try:
-            info, calendar = t.info, t.calendar
-        except:
-            info, calendar = {}, None
-
-        return {"history": hist_df, "info": info, "calendar": calendar, "calls": calls, "puts": puts, "snap_date": snap_date}
-    except Exception as e:
-        return None
-# --- END OF PART 5 ---
-
-# --- START OF PART 6: SIDEBAR UI ---
-st.sidebar.header("🛠️ Dashboard Controls")
-
-vix_v, vix_p, fg_v, fg_r = fetch_macro_data()
-st.sidebar.markdown("### 🌍 Macro Sentiment")
-mac1, mac2 = st.sidebar.columns(2)
-with mac1: st.markdown(custom_metric_box("VIX Index", f"{vix_v:.2f}" if isinstance(vix_v, float) else "N/A", f"{vix_p:+.2f}%" if isinstance(vix_p, float) else "", sub_color="#ff4b4b" if (isinstance(vix_p, float) and vix_p > 0) else "#09ab3b"), unsafe_allow_html=True)
-with mac2: st.markdown(custom_metric_box("Fear & Greed", str(fg_v), str(fg_r), val_color="#ffcc00"), unsafe_allow_html=True)
-st.sidebar.markdown("---")
-
-st.sidebar.markdown("### 🎯 Global Target")
-target_ticker = st.sidebar.text_input("Enter Ticker (e.g., SPY, AAPL, TSLA):", value="SPY").upper().strip()
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("📅 Scanner Expiration & Risk")
-use_custom_date = st.sidebar.checkbox("Use Custom / LEAPS Date")
-
-if use_custom_date:
-    custom_exp_date = st.sidebar.date_input("Select Expiration Date:")
-    selected_date_str = custom_exp_date.strftime('%Y-%m-%d')
-else:
-    selected_date_str = st.sidebar.selectbox("Standard Friday Expirations (6 Mo):", options=get_pure_fridays(weeks=26))
-
-target_delta = st.sidebar.select_slider("Target Strike Delta:", options=[0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40], value=0.15)
-dte = max(1, (datetime.strptime(selected_date_str, '%Y-%m-%d') - datetime.now()).days)
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("🔥 Premium Hunter Scanner")
-LIQUID_50 = ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA', 'AMD', 'PLTR', 'NFLX', 'BA', 'DIS', 'BABA', 'UBER', 'COIN', 'HOOD', 'INTC', 'MU', 'AVGO', 'TSM', 'JPM', 'BAC', 'C', 'V', 'MA', 'PYPL', 'SQ', 'WMT', 'TGT', 'COST', 'HD', 'SBUX', 'NKE', 'MCD', 'XOM', 'CVX', 'CAT', 'GE', 'JNJ', 'PFE', 'UNH', 'LLY', 'CMCSA', 'VZ', 'T', 'QCOM', 'CRM', 'SNOW', 'SHOP', 'SPOT']
-
-if st.sidebar.button("Scan for High Premium"):
-    with st.spinner("Analyzing Liquid 50..."):
-        targets = run_premium_hunter(LIQUID_50)
-        if targets: 
-            st.sidebar.success("🎯 High Volatility Targets:")
-            for t in targets: st.sidebar.write(f"- **{t}**")
-        else: 
-            st.sidebar.warning("Volatility is dead. No elevated IV environments found.")
-# --- END OF PART 6 ---
-
-# --- START OF PART 7: TABS INITIALIZATION ---
-st.markdown("---")
-with st.expander("📖 Terminal Indicator Glossary (Quick Reference)", expanded=False):
-    st.subheader("🚦 Title Risk & Veto Signals")
-    st.write("- **IV Rank (IVR):** Relates current IV to the 52-week high/low. >50 is Tastytrade territory.")
-    st.write("- **⚠️ [EARNINGS SOON]:** Earnings report occurs before expiration.")
-    st.write("- **⚠️ [EX-DIVIDEND DANGER]:** Ex-Div date occurs before expiration.")
-    st.write("- **🔴 *FALLING KNIFE*:** Price below 8-EMA. Consider Call Spreads only.")
-    st.write("- **🟠 *GAP RISK*:** Historical tendency to jump >1.5% overnight.")
-    st.write("- **🟡 *TRENDING*:** ADX (>25). Stock is moving fast; pick a directional spread.")
-    st.write("- **🟢 *FLOOR CONFIRMED*:** 8-EMA Reclaimed. Consider Put Spreads only.")
-    st.write("- **🟢 *NEUTRAL CHOP*:** Ideal sideways environment for Iron Condors.")
-
-tab_scanner, tab_intraday, tab_deepdive, tab_financials = st.tabs(["🛡️ Option Scanner", "🎯 Intraday Sniper", "🔬 Technical Deep Dive", "🏛️ Corporate Fundamentals"])
-# --- END OF PART 7 ---
-
-# --- START OF PART 8 & 9: SCANNER DATA & UI ---
-with tab_scanner:
-    if not target_ticker:
-        st.info("Enter a ticker in the sidebar to begin.")
-    else:
-        with st.spinner(f"Pulling Tradier Options Data for {target_ticker}..."):
-            v_data = fetch_vault_payload(target_ticker, selected_date_str)
-            
-        if not v_data:
-            st.error(f"Failed to fetch data for {target_ticker}.")
-        else:
-            hist_1y = v_data["history"]
-            if len(hist_1y) >= 20:
-                hist = hist_1y.tail(63) 
-                current_price = hist['Close'].iloc[-1]
-                prev_close = hist['Close'].iloc[-2]
-                change_dlr, change_pct = current_price - prev_close, ((current_price - prev_close) / prev_close) * 100
-                change_color = "#ff4b4b" if change_dlr < 0 else "#09ab3b"
-                
-                ma_20 = hist['Close'].rolling(window=20).mean().iloc[-1]
-                ema_8 = hist['Close'].ewm(span=8, adjust=False).mean().iloc[-1]
-                rsi_5 = calculate_rsi(hist['Close'], periods=5).iloc[-1]
-                rsi_5_prev = calculate_rsi(hist['Close'], periods=5).iloc[-2]
-                rsi_9 = calculate_rsi(hist['Close'], periods=9).iloc[-1]
-                rsi_14 = calculate_rsi(hist['Close'], periods=14).iloc[-1]
-                adx_14 = calculate_adx(hist)
-                gap_risk = calculate_gap_risk(hist)
-                poc, sup1, sup2, res1, res2 = calculate_volume_nodes(hist, current_price)
-                
-                atm_iv_display, ivr, max_pain, pc_ratio = "N/A", "N/A", "N/A", "N/A"
-                put_strike, call_strike, put_trip, call_trip = None, None, "N/A", "N/A"
-                put_pop, put_p50, call_pop, call_p50, expected_move_val = "N/A", "N/A", "N/A", "N/A", 0.0
-                
-                calls = v_data["calls"]
-                puts = v_data["puts"]
-                target_date = v_data["snap_date"]
-                
-                if calls is not None and puts is not None and not calls.empty:
-                    calls['strike_dist'] = (calls['strike'] - current_price).abs()
-                    closest_calls = calls.nsmallest(3, 'strike_dist')
-                    valid_ivs = closest_calls[closest_calls['impliedVolatility'] > 0.01]['impliedVolatility']
-                    
-                    if not valid_ivs.empty:
-                        atm_iv_raw = float(valid_ivs.mean())
-                        atm_iv_display = f"{atm_iv_raw * 100:.1f}%"
-                        calc_ivr = calculate_ivr(hist_1y, atm_iv_raw)
-                        if isinstance(calc_ivr, (int, float)): ivr = f"{calc_ivr:.1f}"
-                        
-                        expected_move_val = calculate_expected_move(current_price, atm_iv_raw, dte)
-                    
-                    call_strike, call_delta = find_delta_strikes(calls, current_price, dte, target_delta, 'call')
-                    put_strike, put_delta = find_delta_strikes(puts, current_price, dte, target_delta, 'put')
-                    
-                    if call_strike: 
-                        call_trip = f"${call_strike * 0.95:.2f}"
-                        call_pop, call_p50 = calculate_pop_metrics(call_delta)
-                    if put_strike: 
-                        put_trip = f"${put_strike * 1.05:.2f}"
-                        put_pop, put_p50 = calculate_pop_metrics(put_delta)
-                
-                if calls is not None and puts is not None and not calls.empty and not puts.empty:
-                    tot_put_oi, tot_call_oi = puts['openInterest'].sum(), calls['openInterest'].sum()
-                    if tot_call_oi > 0: pc_ratio = f"{tot_put_oi / tot_call_oi:.2f}"
-                    all_strikes = sorted(list(set(calls['strike'].tolist() + puts['strike'].tolist())))
-                    mp_val, mp_strike = float('inf'), "N/A"
-                    for s in all_strikes:
-                        c_loss = calls[calls['strike'] < s].apply(lambda x: (s - x['strike']) * x['openInterest'], axis=1).sum()
-                        p_loss = puts[puts['strike'] > s].apply(lambda x: (x['strike'] - s) * x['openInterest'], axis=1).sum()
-                        if (c_loss + p_loss) < mp_val: mp_val, mp_strike = c_loss + p_loss, s
-                    if mp_strike != "N/A": max_pain = f"${mp_strike:.2f}"
-
-                info = v_data["info"]
-                ex_div_date, ex_div_veto = "None scheduled", False
-                if 'exDividendDate' in info and info['exDividendDate'] is not None:
-                    try:
-                        ex_dt = datetime.fromtimestamp(info['exDividendDate'])
-                        ex_div_date = ex_dt.strftime('%Y-%m-%d')
-                        if datetime.now() < ex_dt < datetime.strptime(target_date, '%Y-%m-%d'): ex_div_veto = True
-                    except: pass
-
-                calendar = v_data["calendar"]
-                earnings_date, earnings_veto = "Not scheduled", False
-                try:
-                    if calendar is not None:
-                        e_date = pd.to_datetime(calendar.get('Earnings Date')[0]) if isinstance(calendar, dict) else pd.to_datetime(calendar.loc['Earnings Date'].iloc[0])
-                        if pd.notnull(e_date):
-                            earnings_date = e_date.strftime('%Y-%m-%d')
-                            if datetime.now() < e_date < datetime.strptime(target_date, '%Y-%m-%d'): earnings_veto = True
-                except: pass
-
-                if current_price < ema_8 and rsi_14 < 45: base_risk = "🔴 ***FALLING KNIFE***: Call Spreads Only"
-                elif current_price > ema_8 and rsi_5 > rsi_5_prev and rsi_14 < 50: base_risk = "🟢 ***FLOOR CONFIRMED***: Put Spreads Only"
-                elif gap_risk > 1.5: base_risk = f"🟠 ***GAP RISK***: High Overnight Vol ({gap_risk:.2f}%)"
-                elif adx_14 > 25: base_risk = f"🟡 ***TRENDING***: ADX {adx_14:.1f} (Pick Directional)"
-                elif current_price > ma_20: base_risk = "🟢 ***NEUTRAL CHOP***: Condor Territory"
-                else: base_risk = "🟡 ***MED RISK***: Price Stalling"
-
-                risk = base_risk + (" [EARNINGS SOON]" if earnings_veto else "") + (" ⚠️[EX-DIVIDEND DANGER]" if ex_div_veto else "")
-                ivr_color = "#09ab3b" if (isinstance(ivr, str) and ivr != "N/A" and float(ivr) > 50) else "#a6a6a6"
-
-                # UI Render
-                st.markdown(f"### {target_ticker} | Price: ${current_price:.2f} | Target Chain: {target_date}")
-                st.markdown(f"**Risk Framework:** {risk}")
-                c1, c2, c3, c4, c5 = st.columns(5)
-                with c1: st.markdown(custom_metric_box("Today's Change", f"${current_price:.2f}", f"{change_dlr:+.2f} ({change_pct:+.2f}%)", sub_color=change_color), unsafe_allow_html=True)
-                with c2: st.markdown(custom_metric_box(f"{int(target_delta*100)}Δ Put", f"${put_strike:.2f}" if put_strike else "N/A", f"Trip: {put_trip}", sub_color="#ffcc00"), unsafe_allow_html=True)
-                with c3: st.markdown(custom_metric_box(f"{int(target_delta*100)}Δ Call", f"${call_strike:.2f}" if call_strike else "N/A", f"Trip: {call_trip}", sub_color="#ffcc00"), unsafe_allow_html=True)
-                with c4: st.markdown(custom_metric_box("Volatility Rank", f"IVR: {ivr}", f"ATM IV: {atm_iv_display}", val_color=ivr_color), unsafe_allow_html=True)
-                with c5: st.markdown(custom_metric_box("Earnings Date", f"{earnings_date}", "Upcoming Catalyst", sub_color="#ffcc00" if earnings_veto else "#a6a6a6"), unsafe_allow_html=True)
-                
-                st.markdown("---")
-                st.caption("🛡️ Probability Matrix & Risk Underwriting")
-                u1, u2, u3, u4, u5 = st.columns(5)
-                with u1: 
-                    em_range = f"±${expected_move_val:.2f}" if expected_move_val > 0 else "N/A"
-                    em_sub = f"[{current_price - expected_move_val:.2f} to {current_price + expected_move_val:.2f}]" if expected_move_val > 0 else ""
-                    st.markdown(custom_metric_box("Expected Move", em_range, em_sub, val_color="#09ab3b"), unsafe_allow_html=True)
-                with u2: st.markdown(custom_metric_box(f"Put POP / P50", f"{put_pop}", f"P50: {put_p50}", sub_color="#a6a6a6"), unsafe_allow_html=True)
-                with u3: st.markdown(custom_metric_box(f"Call POP / P50", f"{call_pop}", f"P50: {call_p50}", sub_color="#a6a6a6"), unsafe_allow_html=True)
-                with u4: st.markdown(custom_metric_box("Max Pain", f"{max_pain}", "Gravity Point", sub_color="#a6a6a6"), unsafe_allow_html=True)
-                with u5:
-                    pc_color, pc_sub = "#a6a6a6", "Neutral Flow"
-                    try:
-                        pcr = float(pc_ratio)
-                        if pcr > 1.2: pc_color, pc_sub = "#ff4b4b", "Heavy Bearish Flow"
-                        elif pcr < 0.8: pc_color, pc_sub = "#09ab3b", "Heavy Bullish Flow"
-                    except: pass
-                    st.markdown(custom_metric_box("P/C OI Ratio", f"{pc_ratio}", pc_sub, sub_color=pc_color), unsafe_allow_html=True)
-
-                st.markdown("---")
-                v1, v2, v3, v4 = st.columns(4)
-                def get_s(v): return "Oversold" if v <= 30 else "Overbought" if v >= 70 else "Neutral"
-                with v1: st.caption("🧲 POC & Trend"); st.write(f"**POC:** {poc}"); st.write(f"**ADX:** {adx_14:.1f}")
-                with v2: st.caption("📈 RSI Stack"); st.write(f"5D: {rsi_5:.1f} ({get_s(rsi_5)})"); st.write(f"9D: {rsi_9:.1f} ({get_s(rsi_9)})"); st.write(f"14D: {rsi_14:.1f} ({get_s(rsi_14)})")
-                with v3: st.caption("🔴 Support Walls"); st.write(f"**Wall 1:** {sup1}"); st.write(f"**Wall 2:** {sup2}")
-                with v4: st.caption("🟢 Resistance Walls"); st.write(f"**Wall 1:** {res1}"); st.write(f"**Wall 2:** {res2}")
-
-                fig = go.Figure(data=[go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'], name="Price")])
-                fig.add_trace(go.Scatter(x=hist.index, y=hist['Close'].ewm(span=8, adjust=False).mean(), line=dict(color='#ff9900', width=1.5, dash='dot'), name="8-EMA"))
-                if call_strike: fig.add_hline(y=float(call_strike), line_width=2, line_color="green", annotation_text=f"{target_delta}Δ Call")
-                if put_strike: fig.add_hline(y=float(put_strike), line_width=2, line_color="red", annotation_text=f"{target_delta}Δ Put")
-                
-                if expected_move_val > 0:
-                    fig.add_hline(y=current_price + expected_move_val, line_width=1, line_dash="dash", line_color="rgba(255,255,255,0.3)", annotation_text="+1 EM")
-                    fig.add_hline(y=current_price - expected_move_val, line_width=1, line_dash="dash", line_color="rgba(255,255,255,0.3)", annotation_text="-1 EM")
-
-                fig.update_layout(template="plotly_dark", height=500, margin=dict(l=0, r=0, t=30, b=0), xaxis_rangeslider_visible=False)
-                st.plotly_chart(fig, use_container_width=True)
-
-# --- START OF PART 10: INTRADAY SNIPER (NEW) ---
-with tab_intraday:
-    if target_ticker:
-        with st.spinner(f"Acquiring Intraday & Options Data for {target_ticker}..."):
-            tkr = yf.Ticker(target_ticker)
-            df_intraday = tkr.history(period="1d", interval="1m")
-            
-            if df_intraday.empty:
-                st.error(f"Could not fetch 1-minute intraday data for {target_ticker}. The market might be closed or the ticker is invalid.")
-            else:
-                # 1. Price Action & Trend Calculation
-                df_intraday = calculate_vwap(df_intraday)
-                df_intraday['EMA_8'] = df_intraday['Close'].ewm(span=8, adjust=False).mean()
-                
-                curr_price_intra = df_intraday['Close'].iloc[-1]
-                open_price = df_intraday['Open'].iloc[0]
-                current_vwap = df_intraday['VWAP'].iloc[-1]
-                curr_ema8 = df_intraday['EMA_8'].iloc[-1]
-                
-                price_color = "#09ab3b" if curr_price_intra >= open_price else "#ff4b4b"
-                vwap_rel = ((curr_price_intra - current_vwap) / current_vwap) * 100
-                
-                # 2. Options Volume Flow Calculation
-                pcr_vol, implied_move, exp_date_intra = "N/A", 0.0, "N/A"
-                pcr_score = 0
-                try:
-                    exps = tkr.options
-                    if exps:
-                        exp_date_intra = exps[0] 
-                        chain_intra = tkr.option_chain(exp_date_intra)
-                        calls_intra, puts_intra = chain_intra.calls, chain_intra.puts
-                        
-                        total_call_vol = calls_intra['volume'].sum()
-                        total_put_vol = puts_intra['volume'].sum()
-                        if total_call_vol > 0: 
-                            pcr_vol = total_put_vol / total_call_vol
-                            # Grade the flow: < 0.85 is heavily bullish, > 1.15 is heavily bearish
-                            if pcr_vol < 0.85: pcr_score = 1
-                            elif pcr_vol > 1.15: pcr_score = -1
-                        
-                        atm_call_intra = calls_intra.iloc[(calls_intra['strike'] - curr_price_intra).abs().argsort()[:1]]
-                        if not atm_call_intra.empty and 'impliedVolatility' in atm_call_intra:
-                            iv_intra = atm_call_intra['impliedVolatility'].values[0]
-                            implied_move = curr_price_intra * iv_intra * np.sqrt(1/365.0)
-                except: pass
-
-                # 3. The Conviction Engine (Scoring -3 to +3)
-                score = 0
-                score += 1 if curr_price_intra > current_vwap else -1  # Macro intraday trend
-                score += 1 if curr_price_intra > curr_ema8 else -1     # Micro momentum
-                score += pcr_score                                     # Smart money flow
-
-                if score == 3: signal, sig_col = "🟢 HIGH CONVICTION LONG", "#09ab3b"
-                elif score >= 1: signal, sig_col = "🟡 LEANING LONG (Scalp)", "#ffcc00"
-                elif score <= -1 and score > -3: signal, sig_col = "🟡 LEANING SHORT (Scalp)", "#ffcc00"
-                elif score == -3: signal, sig_col = "🔴 HIGH CONVICTION SHORT", "#ff4b4b"
-                else: signal, sig_col = "⚪ NEUTRAL / CHOP ZONE", "#a6a6a6"
-
-                # 4. UI Render
-                st.markdown(f"### {target_ticker} | Intraday Profile")
-                
-                # Dynamic Conviction Banner
-                st.markdown(f"<div style='text-align: center; padding: 15px; background-color: #1e1e1e; border: 2px solid {sig_col}; border-radius: 8px; margin-bottom: 20px;'><h3 style='color: {sig_col}; margin: 0;'>{signal}</h3><span style='color: #a6a6a6;'>Algo Score: {score}/3 | PCR: {pcr_vol if isinstance(pcr_vol, str) else round(pcr_vol, 2)} | VWAP Rel: {vwap_rel:+.2f}%</span></div>", unsafe_allow_html=True)
-
-                m1, m2, m3, m4 = st.columns(4)
-                with m1: st.markdown(intraday_metric("Last Price", f"${curr_price_intra:.2f}", f"Open: ${open_price:.2f}", val_color=price_color), unsafe_allow_html=True)
-                with m2: st.markdown(intraday_metric("Intraday VWAP", f"${current_vwap:.2f}", f"8-EMA: ${curr_ema8:.2f}", val_color="#ffcc00"), unsafe_allow_html=True)
-                with m3:
-                    pcr_val = f"{pcr_vol:.2f}" if isinstance(pcr_vol, float) else pcr_vol
-                    pcr_col = "#ff4b4b" if isinstance(pcr_vol, float) and pcr_vol > 1.0 else "#09ab3b"
-                    st.markdown(intraday_metric(f"Nearest Vol PCR ({exp_date_intra})", pcr_val, "Volume Put/Call Ratio", val_color=pcr_col), unsafe_allow_html=True)
-                with m4:
-                    move_str = f"±${implied_move:.2f}" if implied_move > 0 else "N/A"
-                    st.markdown(intraday_metric("1-Day Expected Move", move_str, "Based on ATM IV", val_color="#3498db"), unsafe_allow_html=True)
-
-                fig_intra = go.Figure()
-                fig_intra.add_trace(go.Candlestick(x=df_intraday.index, open=df_intraday['Open'], high=df_intraday['High'], low=df_intraday['Low'], close=df_intraday['Close'], name="Price"))
-                fig_intra.add_trace(go.Scatter(x=df_intraday.index, y=df_intraday['VWAP'], line=dict(color='#ffcc00', width=2), name="VWAP"))
-                fig_intra.add_trace(go.Scatter(x=df_intraday.index, y=df_intraday['EMA_8'], line=dict(color='#00d4ff', width=1.5, dash='dot'), name="8-EMA"))
-                
-                if implied_move > 0:
-                    fig_intra.add_hline(y=open_price + implied_move, line_width=1, line_dash="dash", line_color="rgba(255,255,255,0.3)", annotation_text="+1 EM")
-                    fig_intra.add_hline(y=open_price - implied_move, line_width=1, line_dash="dash", line_color="rgba(255,255,255,0.3)", annotation_text="-1 EM")
-
-                fig_intra.update_layout(template="plotly_dark", height=550, margin=dict(l=0, r=0, t=30, b=0), xaxis_rangeslider_visible=False, showlegend=True, legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01))
-                st.plotly_chart(fig_intra, use_container_width=True)
-
-                # --- START OF INTRADAY GLOSSARY ---
-                st.markdown("---")
-                with st.expander("📖 Intraday Algo Score & Indicator Glossary", expanded=False):
-                    st.markdown("""
-                    ### 🧠 The Conviction Scoring Engine (-3 to +3)
-                    The algorithm aggregates three distinct data points to form a mechanical bias. Each bullish signal adds +1, and each bearish signal subtracts -1. 
-                    
-                    * **Condition 1: VWAP (Institutional Baseline)**
-                        * **+1:** Price > VWAP (Buyers in control)
-                        * **-1:** Price < VWAP (Sellers in control)
-                    * **Condition 2: 8-EMA (Micro Momentum)**
-                        * **+1:** Price > 8-EMA (Short-term uptrend)
-                        * **-1:** Price < 8-EMA (Short-term downtrend)
-                    * **Condition 3: Options Volume PCR (Smart Money Flow)**
-                        * **+1:** PCR < 0.85 (Heavy intraday Call buying)
-                        * **-1:** PCR > 1.15 (Heavy intraday Put buying)
-                        * *Note: If PCR is between 0.85 and 1.15, it awards 0 points (Neutral).*
-                        
-                    ### 🚦 Signal Translation
-                    * 🟢 **+3 (High Conviction Long):** Perfect bullish alignment. Price is riding momentum, holding above institutional support, and options buyers are fueling the move.
-                    * 🟡 **+1 to +2 (Leaning Long / Scalp):** Mixed but bullish. Often happens during consolidations above VWAP. Play small and keep a tight stop.
-                    * ⚪ **0 (Chop Zone):** Zero edge. Trend and flow are contradicting each other. Sit on your hands.
-                    * 🟡 **-1 to -2 (Leaning Short / Scalp):** Mixed but bearish. Support is cracking, but flow hasn't fully committed yet.
-                    * 🔴 **-3 (High Conviction Short):** Perfect bearish alignment. Total breakdown in price action confirmed by aggressive put buying.
-                    
-                    ### 📊 Additional Metrics
-                    * **VWAP Rel:** The exact percentage distance the current price is extended away from VWAP. Watch for mean-reversion (snap-backs) if this gets excessively high or low (e.g., > 1.5%).
-                    * **1-Day Expected Move:** Based on the immediate ATM Implied Volatility. Projects the statistical boundaries of today's price action measured from the morning's Open price.
-                    """)
-                # --- END OF INTRADAY GLOSSARY ---
-# --- END OF PART 10 ---
-
-# --- START OF PART 11: DEEP DIVE QUANT ---
-with tab_deepdive:
-    if target_ticker:
-        with st.spinner(f"Running Quant analysis on {target_ticker}..."):
-            try:
-                t_dd = yf.Ticker(target_ticker)
-                hist_dd = t_dd.history(period="1y")
-                
-                if len(hist_dd) < 50:
-                    st.warning("Not enough trading history to generate a robust analysis.")
-                else:
-                    hist_6mo = hist_dd.tail(126)
-                    dd_price = hist_6mo['Close'].iloc[-1]
-                    sma_20_dd = hist_6mo['Close'].rolling(window=20).mean().iloc[-1]
-                    sma_50_dd = hist_6mo['Close'].rolling(window=50).mean().iloc[-1]
-                    rsi_14_dd = calculate_rsi(hist_6mo['Close'], periods=14).iloc[-1]
-                    adx_14_dd = calculate_adx(hist_6mo)
-                    poc_dd, sup1_dd, sup2_dd, res1_dd, res2_dd = calculate_volume_nodes(hist_6mo, dd_price)
-
-                    info_dd = t_dd.info
-                    short_pct = info_dd.get('shortPercentOfFloat', 0)
-                    if short_pct is None: short_pct = 0
-                    
-                    returns_1y = hist_dd['Close'].pct_change().dropna()
-                    hv_20 = returns_1y.rolling(window=20).std() * np.sqrt(252)
-                    current_hv = hv_20.iloc[-1]
-                    
-                    skew_status, skew_text = "⚖️ **Balanced Skew:**", "Put and Call implied volatilities are relatively balanced."
-                    liq_status, liq_text = "⚖️ **Adequate Liquidity:**", "Volume is average. Be cautious of bid-ask spreads."
-                    atm_iv_dd = current_hv 
-                    oi_fig = None
-                    
-                    try:
-                        valid_dates = t_dd.options
-                        if valid_dates:
-                            target_dd = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d')
-                            target_dt = datetime.strptime(target_dd, '%Y-%m-%d')
-                            valid_dts = [datetime.strptime(d, '%Y-%m-%d') for d in valid_dates]
-                            snap_date = min(valid_dts, key=lambda d: abs(d - target_dt)).strftime('%Y-%m-%d')
-                            
-                            chain = t_dd.option_chain(snap_date)
-                            calls, puts = chain.calls, chain.puts
-                            
-                            if not calls.empty and not puts.empty:
-                                total_vol = calls['volume'].fillna(0).sum() + puts['volume'].fillna(0).sum()
-                                avg_vol = total_vol / (len(calls) + len(puts))
-                                if avg_vol > 300: liq_status, liq_text = "🌊 **A+ Liquidity:**", "Highly liquid options chain. Minimal slippage expected."
-                                elif avg_vol < 50: liq_status, liq_text = "🧊 **Poor Liquidity:**", "Low volume. Expect massive slippage."
-                                
-                                otm_call = calls[calls['strike'] >= dd_price * 1.1]
-                                otm_put = puts[puts['strike'] <= dd_price * 0.9]
-                                
-                                if not calls.empty: atm_iv_dd = calls.iloc[(calls['strike'] - dd_price).abs().argsort()[:1]]['impliedVolatility'].values[0]
-                                    
-                                if not otm_call.empty and not otm_put.empty:
-                                    skew_diff = otm_put.iloc[-1]['impliedVolatility'] - otm_call.iloc[0]['impliedVolatility']
-                                    if skew_diff > 0.12: skew_status, skew_text = "🚨 **Severe Downside Skew:**", "Market pricing OTM Puts higher than Calls. Crash protection is expensive."
-                                    elif skew_diff < -0.12: skew_status, skew_text = "🚀 **Upside Call Skew:**", "OTM Calls pricing higher than Puts. Market anticipating upside."
-                                        
-                                calls_oi = calls[(calls['strike'] >= dd_price * 0.85) & (calls['strike'] <= dd_price * 1.15)]
-                                puts_oi = puts[(puts['strike'] >= dd_price * 0.85) & (puts['strike'] <= dd_price * 1.15)]
-                                
-                                oi_fig = go.Figure()
-                                oi_fig.add_trace(go.Bar(x=calls_oi['strike'], y=calls_oi['openInterest'], name='Call OI', marker_color='#09ab3b', opacity=0.7))
-                                oi_fig.add_trace(go.Bar(x=puts_oi['strike'], y=puts_oi['openInterest'], name='Put OI', marker_color='#ff4b4b', opacity=0.7))
-                                oi_fig.update_layout(title="Open Interest Profile", template="plotly_dark", height=300, margin=dict(l=0, r=0, t=30, b=0), barmode='group')
-                                oi_fig.add_vline(x=dd_price, line_width=2, line_dash="dash", line_color="white", annotation_text="Price")
-                    except: pass
-
-                    ivr_val = calculate_ivr(hist_dd, atm_iv_dd)
-                    ivr_str = f"{ivr_val:.1f}" if isinstance(ivr_val, (int, float)) else "N/A"
-
-                    if dd_price > sma_20_dd and dd_price > sma_50_dd: trend_status, trend_text = "🟢 **Bullish Uptrend:**", f"Trading at \${dd_price:.2f}, above 20MA and 50MA."
-                    elif dd_price < sma_20_dd and dd_price < sma_50_dd: trend_status, trend_text = "🔴 **Bearish Downtrend:**", f"Trading at \${dd_price:.2f}, below 20MA and 50MA."
-                    else: trend_status, trend_text = "🟡 **Mixed / Consolidation:**", f"Caught in battleground at \${dd_price:.2f}."
-
-                    if rsi_14_dd > 70: mom_status, mom_text = "🔥 **Overbought:**", f"RSI running hot ({rsi_14_dd:.1f})."
-                    elif rsi_14_dd < 30: mom_status, mom_text = "🧊 **Oversold:**", f"RSI indicates punishment ({rsi_14_dd:.1f})."
-                    else: mom_status, mom_text = "⚖️ **Neutral Momentum:**", f"RSI balanced ({rsi_14_dd:.1f})."
-
-                    struct_text = f"POC located at **{poc_dd}**. "
-                    if sup1_dd != "Freefall (None)": struct_text += f"Support floor around **{sup1_dd}**. "
-                    if res1_dd != "Sky (None)": struct_text += f"Resistance ceiling around **{res1_dd}**."
-                    struct_text = struct_text.replace("$", r"\$")
-
-                    if isinstance(ivr_val, (int, float)) and ivr_val > 50: vol_status, vol_text = "🔥 **TASTYTRADE SELL ZONE:**", f"IVR is **{ivr_str}**. Premiums inflated. Sell Iron Condors."
-                    elif isinstance(ivr_val, (int, float)) and ivr_val < 20: vol_status, vol_text = "🧊 **LOW VOLATILITY:**", f"IVR is dead (**{ivr_str}**). Avoid selling premium."
-                    else: vol_status, vol_text = "⚖️ **Neutral Volatility:**", f"IVR is **{ivr_str}**. Premiums at fair value."
-
-                    sqz_status, sqz_text = ("🚨 **High Squeeze Risk:**", f"**{short_pct*100:.1f}%** float sold short.") if short_pct > 0.10 else ("✅ **Low Squeeze Risk:**", f"Minimal short interest ({short_pct*100:.1f}%).")
-                    
-                    st.markdown("---")
-                    st.subheader(f"Underwriting Translation for {target_ticker}")
-                    col1, col2 = st.columns([1, 1])
-                    with col1:
-                        st.markdown("#### 📈 1. Technical Framework")
-                        st.markdown(f"{trend_status} {trend_text}"); st.markdown(f"{mom_status} {mom_text}"); st.markdown(f"🏛️ **Price Magnets:** {struct_text}")
-                        st.markdown("#### ⚖️ 2. Premium Context")
-                        st.markdown(f"{vol_status} {vol_text}"); st.markdown(f"{liq_status} {liq_text}"); st.markdown(f"{skew_status} {skew_text}")
-                        st.markdown("#### 🛡️ 3. Tail Risk")
-                        st.markdown(f"{sqz_status} {sqz_text}")
-                    with col2:
-                        fig_dd = go.Figure(data=[go.Candlestick(x=hist_6mo.index, open=hist_6mo['Open'], high=hist_6mo['High'], low=hist_6mo['Low'], close=hist_6mo['Close'], name="Price")])
-                        fig_dd.update_layout(template="plotly_dark", height=300, margin=dict(l=0, r=0, t=10, b=0), xaxis_rangeslider_visible=False)
-                        st.plotly_chart(fig_dd, use_container_width=True)
-                        if oi_fig: st.plotly_chart(oi_fig, use_container_width=True)
-            except Exception as e: st.error(f"Error analyzing {target_ticker}: {str(e)}")
-# --- END OF PART 11 ---
-
-# --- START OF PART 12: FINANCIAL FUNDAMENTALS ---
-with tab_financials:
-    if target_ticker:
-        with st.spinner(f"Pulling SEC Filings for {target_ticker}..."):
-            try:
-                fin_t = yf.Ticker(target_ticker)
-                info = fin_t.info
-                
-                # Retrieve Financial Statements
-                inc_stmt = fin_t.financials
-                cash_flow = fin_t.cashflow
-                
-                if inc_stmt.empty:
-                    st.warning(f"No fundamental data available for {target_ticker}. It may be an ETF (like SPY) or index.")
-                else:
-                    inc_stmt = inc_stmt[inc_stmt.columns[::-1]] 
-                    cash_flow = cash_flow[cash_flow.columns[::-1]]
-                    
-                    years = [str(date)[:4] for date in inc_stmt.columns]
-                    
-                    def safe_extract(df, row_name):
-                        try: return df.loc[row_name].fillna(0).values / 1e9 # Convert to Billions
-                        except: return np.zeros(len(years))
-
-                    revenue = safe_extract(inc_stmt, 'Total Revenue')
-                    net_income = safe_extract(inc_stmt, 'Net Income')
-                    fcf = safe_extract(cash_flow, 'Free Cash Flow')
-
-                    st.markdown("---")
-                    
-                    st.subheader(f"{info.get('shortName', target_ticker)} | Key Valuation Metrics")
-                    r1, r2, r3, r4 = st.columns(4)
-                    
-                    pe = info.get('trailingPE', 'N/A')
-                    fwd_pe = info.get('forwardPE', 'N/A')
-                    pb = info.get('priceToBook', 'N/A')
-                    dte_ratio = info.get('debtToEquity', 'N/A')
-                    
-                    def fmt(val): return f"{val:.2f}" if isinstance(val, (int, float)) else val
-                    
-                    with r1: st.markdown(custom_metric_box("Trailing P/E", fmt(pe), "Price to Earnings", val_color="#ffcc00"), unsafe_allow_html=True)
-                    with r2: st.markdown(custom_metric_box("Forward P/E", fmt(fwd_pe), "Est. Future P/E", val_color="#ffcc00"), unsafe_allow_html=True)
-                    with r3: st.markdown(custom_metric_box("Price to Book", fmt(pb), "P/B Ratio"), unsafe_allow_html=True)
-                    with r4: st.markdown(custom_metric_box("Debt to Equity", fmt(dte_ratio), "Leverage Ratio", sub_color="#ff4b4b" if (isinstance(dte_ratio, (int, float)) and dte_ratio > 100) else "#09ab3b"), unsafe_allow_html=True)
-                    
-                    st.markdown("---")
-                    
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        fig_inc = go.Figure()
-                        fig_inc.add_trace(go.Bar(x=years, y=revenue, name="Total Revenue", marker_color="#09ab3b"))
-                        fig_inc.add_trace(go.Bar(x=years, y=net_income, name="Net Income", marker_color="#3498db"))
-                        fig_inc.update_layout(title="Income Statement (Billions USD)", template="plotly_dark", barmode='group', height=400)
-                        st.plotly_chart(fig_inc, use_container_width=True)
-                        
-                    with col2:
-                        fig_cf = go.Figure()
-                        fig_cf.add_trace(go.Bar(x=years, y=fcf, name="Free Cash Flow", marker_color="#ff9900"))
-                        fig_cf.update_layout(title="Free Cash Flow (Billions USD)", template="plotly_dark", height=400)
-                        st.plotly_chart(fig_cf, use_container_width=True)
-                        
-            except Exception as e:
-                st.error(f"Error retrieving fundamentals for {target_ticker}: {str(e)}")
-# --- END OF PART 12 (END OF SCRIPT) ---
+                        iv = greeks.get
