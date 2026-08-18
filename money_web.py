@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import plotly.graph_objects as go
 from scipy.stats import norm
 import requests
+import concurrent.futures
 
 # --- CONFIG & THEME ---
 st.set_page_config(page_title="Aegis Terminal", layout="wide", initial_sidebar_state="expanded")
@@ -115,25 +116,97 @@ def intraday_metric(label, value, sub_value="", val_color="#FAFAFA", sub_color="
     return f'<div style="line-height: 1.4; margin-bottom: 14px; padding: 10px; background-color: #1e1e1e; border-radius: 8px;"><span style="font-size: 0.85rem; color: #a6a6a6;">{label}</span><br><span style="font-size: 1.8rem; font-weight: 600; color: {val_color};">{value}</span><br><span style="font-size: 0.9rem; font-weight: 500; color: {sub_color};">{sub_value}</span></div>'
 # --- END OF PART 3 ---
 
-# --- START OF PART 4: SCRAPERS & MACRO ---
+# --- START OF PART 4: TRADIER GLOBAL ENGINE & SCRAPERS ---
+def fetch_tradier_history(symbol):
+    headers = {"Authorization": f"Bearer {st.secrets['TRADIER_API_KEY'].strip()}", "Accept": "application/json"}
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=365)
+    url = f"https://api.tradier.com/v1/markets/history?symbol={symbol}&start={start_date.strftime('%Y-%m-%d')}&end={end_date.strftime('%Y-%m-%d')}"
+    try:
+        res = requests.get(url, headers=headers, timeout=5)
+        if res.status_code == 200:
+            data = res.json().get('history', {}).get('day', [])
+            if data:
+                if isinstance(data, dict): data = [data]
+                df = pd.DataFrame(data)
+                df['date'] = pd.to_datetime(df['date'])
+                df.set_index('date', inplace=True)
+                df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}, inplace=True)
+                return symbol, df
+    except: pass
+    return symbol, pd.DataFrame()
+
+def fetch_tradier_1m(symbol):
+    headers = {"Authorization": f"Bearer {st.secrets['TRADIER_API_KEY'].strip()}", "Accept": "application/json"}
+    url = f"https://api.tradier.com/v1/markets/timesales?symbol={symbol}&interval=1min"
+    try:
+        res = requests.get(url, headers=headers, timeout=5)
+        if res.status_code == 200:
+            data = res.json()
+            if 'series' in data and data['series'] and 'data' in data['series']:
+                df = pd.DataFrame(data['series']['data'])
+                if not df.empty:
+                    df['time'] = pd.to_datetime(df['time'])
+                    df.set_index('time', inplace=True)
+                    df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}, inplace=True)
+                    return symbol, df
+    except: pass
+    return symbol, pd.DataFrame()
+
+def fetch_tradier_intraday_options(symbol):
+    headers = {"Authorization": f"Bearer {st.secrets['TRADIER_API_KEY'].strip()}", "Accept": "application/json"}
+    try:
+        exp_url = f"https://api.tradier.com/v1/markets/options/expirations?symbol={symbol}"
+        exp_resp = requests.get(exp_url, headers=headers, timeout=5)
+        if exp_resp.status_code != 200: return None, None, None
+        
+        dates = exp_resp.json().get('expirations', {}).get('date', [])
+        if not dates: return None, None, None
+        if isinstance(dates, str): dates = [dates]
+        
+        target_dt = datetime.now()
+        valid_dts = [datetime.strptime(d, '%Y-%m-%d') for d in dates]
+        snap_date = min(valid_dts, key=lambda d: abs(d - target_dt)).strftime('%Y-%m-%d')
+        
+        chain_url = f"https://api.tradier.com/v1/markets/options/chains?symbol={symbol}&expiration={snap_date}&greeks=true"
+        chain_resp = requests.get(chain_url, headers=headers, timeout=5)
+        if chain_resp.status_code != 200: return None, None, None
+        
+        opts = chain_resp.json().get('options', {}).get('option', [])
+        if not opts: return None, None, None
+        if isinstance(opts, dict): opts = [opts]
+        
+        calls, puts = [], []
+        for opt in opts:
+            row = {
+                'strike': float(opt.get('strike', 0)),
+                'volume': int(opt.get('volume', 0)),
+                'openInterest': int(opt.get('open_interest', 0)),
+                'impliedVolatility': float(opt.get('greeks', {}).get('mid_iv', 0.3) if isinstance(opt.get('greeks'), dict) else 0.3)
+            }
+            if opt.get('option_type') == 'call': calls.append(row)
+            elif opt.get('option_type') == 'put': puts.append(row)
+            
+        return pd.DataFrame(calls), pd.DataFrame(puts), snap_date
+    except: return None, None, None
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def run_premium_hunter(ticker_list):
     targets = []
     try:
-        bulk_data = yf.download(ticker_list, period="1y", progress=False)['Close']
-        for sym in ticker_list:
-            try:
-                hist = bulk_data[sym].dropna()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            futures = {executor.submit(fetch_tradier_history, sym): sym for sym in ticker_list}
+            for future in concurrent.futures.as_completed(futures):
+                sym, hist = future.result()
                 if len(hist) < 50: continue
-                returns = hist.pct_change().dropna()
+                returns = hist['Close'].pct_change().dropna()
                 hv_series = returns.rolling(20).std() * np.sqrt(252)
                 curr_hv = hv_series.iloc[-1]
                 hv_min, hv_max = hv_series.min(), hv_series.max()
                 if hv_max > hv_min:
                     hv_rank = ((curr_hv - hv_min) / (hv_max - hv_min)) * 100
-                    if hv_rank > 60:
-                        targets.append((sym, hv_rank))
-            except: continue
+                    if hv_rank > 60: targets.append((sym, hv_rank))
+                    
         targets.sort(key=lambda x: x[1], reverse=True)
         return [f"{t[0]} (Rank: {t[1]:.0f})" for t in targets[:6]]
     except: return []
@@ -142,23 +215,10 @@ def run_premium_hunter(ticker_list):
 def run_short_hunter(ticker_list):
     targets = []
     try:
-        # Bulk download 1-minute data to save time and API calls
-        bulk_intraday = yf.download(ticker_list, period="1d", interval="1m", progress=False)
-        
-        for sym in ticker_list:
-            try:
-                # 1. Verify Price Action Breakdown (Fast Check)
-                if 'Close' not in bulk_intraday or sym not in bulk_intraday['Close']:
-                    continue
-                    
-                df_sym = pd.DataFrame({
-                    'Open': bulk_intraday['Open'][sym],
-                    'High': bulk_intraday['High'][sym],
-                    'Low': bulk_intraday['Low'][sym],
-                    'Close': bulk_intraday['Close'][sym],
-                    'Volume': bulk_intraday['Volume'][sym]
-                }).dropna()
-                
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            futures = {executor.submit(fetch_tradier_1m, sym): sym for sym in ticker_list}
+            for future in concurrent.futures.as_completed(futures):
+                sym, df_sym = future.result()
                 if df_sym.empty: continue
                 
                 df_sym = calculate_vwap(df_sym)
@@ -172,40 +232,30 @@ def run_short_hunter(ticker_list):
                 score += 1 if curr_price > curr_vwap else -1
                 score += 1 if curr_price > curr_ema8 else -1
                 
-                # If it's not already at -2 from price action, skip the slow options check
-                if score > -2:
-                    continue
-                    
-                # 2. Verify Options Flow Confirmation (Slow Check)
-                tkr = yf.Ticker(sym)
+                if score > -2: continue
+                
+                calls, puts, _ = fetch_tradier_intraday_options(sym)
                 pcr_score = 0
-                exps = tkr.options
-                if exps:
-                    chain = tkr.option_chain(exps[0])
-                    c_vol = chain.calls['volume'].sum()
-                    p_vol = chain.puts['volume'].sum()
+                if calls is not None and not calls.empty and puts is not None and not puts.empty:
+                    c_vol = calls['volume'].sum()
+                    p_vol = puts['volume'].sum()
                     if c_vol > 0:
                         pcr = p_vol / c_vol
                         if pcr > 1.15: pcr_score = -1
                         elif pcr < 0.85: pcr_score = 1
-                        
-                score += pcr_score
                 
-                # 3. Add to targets if it hits perfect -3
-                if score == -3:
-                    targets.append(sym)
-            except:
-                continue
+                score += pcr_score
+                if score == -3: targets.append(sym)
                 
         return targets
-    except:
-        return []
+    except: return []
 
 @st.cache_data(ttl=900, show_spinner=False)
 def fetch_macro_data():
     vix_val, vix_pct, fg_val, fg_rating = "N/A", "N/A", "N/A", "N/A"
     try:
-        vix_hist = yf.Ticker("^VIX").history(period="1mo")
+        # Replaced yfinance with Tradier for VIX
+        _, vix_hist = fetch_tradier_history("VIX")
         if not vix_hist.empty and len(vix_hist) >= 2:
             vix_val = float(vix_hist['Close'].iloc[-1])
             vix_pct = float(((vix_val - vix_hist['Close'].iloc[-2]) / vix_hist['Close'].iloc[-2]) * 100)
@@ -214,12 +264,10 @@ def fetch_macro_data():
     try:
         url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0',
             'Accept': 'application/json, text/plain, */*',
             'Referer': 'https://www.cnn.com/',
-            'Origin': 'https://www.cnn.com/',
-            'Sec-Fetch-Site': 'cross-site',
-            'Sec-Fetch-Mode': 'cors'
+            'Origin': 'https://www.cnn.com/'
         }
         res = requests.get(url, headers=headers, timeout=5)
         if res.status_code == 200:
@@ -231,39 +279,15 @@ def fetch_macro_data():
     return vix_val, vix_pct, fg_val, fg_rating
 # --- END OF PART 4 ---
 
-# --- START OF PART 5: TRADIER PAYLOAD ---
+# --- START OF PART 5: TRADIER OPTIONS VAULT PAYLOAD ---
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_vault_payload(symbol, target_date):
-    """Pulls options data and history using Tradier (Cached to prevent rate limits)."""
+    """Pulls exact date options data and history using Tradier."""
     try:
-        headers = {
-            "Authorization": f"Bearer {st.secrets['TRADIER_API_KEY'].strip()}",
-            "Accept": "application/json"
-        }
+        headers = {"Authorization": f"Bearer {st.secrets['TRADIER_API_KEY'].strip()}", "Accept": "application/json"}
         
-        # 1. Fetch History 
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=365)
-        hist_url = f"https://api.tradier.com/v1/markets/history?symbol={symbol}&start={start_date.strftime('%Y-%m-%d')}&end={end_date.strftime('%Y-%m-%d')}"
-        hist_resp = requests.get(hist_url, headers=headers)
-                    
-        hist_df = pd.DataFrame()
-        if hist_resp.status_code == 200:
-            hist_data = hist_resp.json()
-            if 'history' in hist_data and hist_data['history'] and 'day' in hist_data['history']:
-                day_data = hist_data['history']['day']
-                if isinstance(day_data, dict): day_data = [day_data]
-                hist_df = pd.DataFrame(day_data)
-                if not hist_df.empty:
-                    hist_df['Date'] = pd.to_datetime(hist_df['date'])
-                    hist_df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}, inplace=True)
-                    hist_df.set_index('Date', inplace=True)
-                    
-        # Fallback to yfinance
-        if hist_df.empty:
-            hist_df = yf.Ticker(symbol).history(period="1y")
+        _, hist_df = fetch_tradier_history(symbol)
 
-        # 2. Fetch Options Expirations
         exp_url = f"https://api.tradier.com/v1/markets/options/expirations?symbol={symbol}"
         exp_resp = requests.get(exp_url, headers=headers)
         
@@ -278,7 +302,6 @@ def fetch_vault_payload(symbol, target_date):
                 if valid_dts:
                     snap_date = min(valid_dts, key=lambda d: abs(d - target_dt)).strftime('%Y-%m-%d')
 
-        # 3. Fetch Option Chain 
         chain_url = f"https://api.tradier.com/v1/markets/options/chains?symbol={symbol}&expiration={snap_date}&greeks=true"
         chain_resp = requests.get(chain_url, headers=headers)
              
@@ -306,9 +329,9 @@ def fetch_vault_payload(symbol, target_date):
 
         calls, puts = pd.DataFrame(calls_list), pd.DataFrame(puts_list)
 
-        # 4. Use yfinance purely for Company Info
-        t = yf.Ticker(symbol)
+        # Restricted lightweight yfinance for corporate actions only
         try:
+            t = yf.Ticker(symbol)
             info, calendar = t.info, t.calendar
         except:
             info, calendar = {}, None
@@ -349,7 +372,7 @@ st.sidebar.subheader("🔥 Premium Hunter Scanner")
 LIQUID_50 = ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA', 'AMD', 'PLTR', 'NFLX', 'BA', 'DIS', 'BABA', 'UBER', 'COIN', 'HOOD', 'INTC', 'MU', 'AVGO', 'TSM', 'JPM', 'BAC', 'C', 'V', 'MA', 'PYPL', 'SQ', 'WMT', 'TGT', 'COST', 'HD', 'SBUX', 'NKE', 'MCD', 'XOM', 'CVX', 'CAT', 'GE', 'JNJ', 'PFE', 'UNH', 'LLY', 'CMCSA', 'VZ', 'T', 'QCOM', 'CRM', 'SNOW', 'SHOP', 'SPOT']
 
 if st.sidebar.button("Scan for High Premium"):
-    with st.spinner("Analyzing Liquid 50..."):
+    with st.spinner("Analyzing Liquid 50 via Tradier API..."):
         targets = run_premium_hunter(LIQUID_50)
         if targets: 
             st.sidebar.success("🎯 High Volatility Targets:")
@@ -357,11 +380,10 @@ if st.sidebar.button("Scan for High Premium"):
         else: 
             st.sidebar.warning("Volatility is dead. No elevated IV environments found.")
 
-# --- SHORT HUNTER ---
 st.sidebar.markdown("---")
 st.sidebar.subheader("🩸 Intraday Short Scanner")
 if st.sidebar.button("Scan for High Conviction Shorts"):
-    with st.spinner("Scanning Liquid 50 for -3 breakdown setups..."):
+    with st.spinner("Scanning Liquid 50 for -3 breakdown setups via Tradier..."):
         short_targets = run_short_hunter(LIQUID_50)
         if short_targets:
             st.sidebar.error("🔴 High Conviction Shorts Found:")
@@ -394,7 +416,7 @@ with tab_scanner:
         with st.spinner(f"Pulling Tradier Options Data for {target_ticker}..."):
             v_data = fetch_vault_payload(target_ticker, selected_date_str)
             
-        if not v_data:
+        if not v_data or v_data["history"].empty:
             st.error(f"Failed to fetch data for {target_ticker}.")
         else:
             hist_1y = v_data["history"]
@@ -535,12 +557,11 @@ with tab_scanner:
                 fig.update_layout(template="plotly_dark", height=500, margin=dict(l=0, r=0, t=30, b=0), xaxis_rangeslider_visible=False)
                 st.plotly_chart(fig, use_container_width=True)
 
-# --- START OF PART 10: INTRADAY SNIPER (NEW) ---
+# --- START OF PART 10: INTRADAY SNIPER (NEW TRADIER ENGINE) ---
 with tab_intraday:
     if target_ticker:
-        with st.spinner(f"Acquiring Intraday & Options Data for {target_ticker}..."):
-            tkr = yf.Ticker(target_ticker)
-            df_intraday = tkr.history(period="1d", interval="1m")
+        with st.spinner(f"Acquiring Intraday & Options Data from Tradier for {target_ticker}..."):
+            _, df_intraday = fetch_tradier_1m(target_ticker)
             
             if df_intraday.empty:
                 st.error(f"Could not fetch 1-minute intraday data for {target_ticker}. The market might be closed or the ticker is invalid.")
@@ -557,35 +578,29 @@ with tab_intraday:
                 price_color = "#09ab3b" if curr_price_intra >= open_price else "#ff4b4b"
                 vwap_rel = ((curr_price_intra - current_vwap) / current_vwap) * 100
                 
-                # 2. Options Volume Flow Calculation
-                pcr_vol, implied_move, exp_date_intra = "N/A", 0.0, "N/A"
+                # 2. Options Volume Flow Calculation via Tradier
+                calls_intra, puts_intra, exp_date_intra = fetch_tradier_intraday_options(target_ticker)
+                pcr_vol, implied_move = "N/A", 0.0
                 pcr_score = 0
-                try:
-                    exps = tkr.options
-                    if exps:
-                        exp_date_intra = exps[0] 
-                        chain_intra = tkr.option_chain(exp_date_intra)
-                        calls_intra, puts_intra = chain_intra.calls, chain_intra.puts
-                        
-                        total_call_vol = calls_intra['volume'].sum()
-                        total_put_vol = puts_intra['volume'].sum()
-                        if total_call_vol > 0: 
-                            pcr_vol = total_put_vol / total_call_vol
-                            # Grade the flow: < 0.85 is heavily bullish, > 1.15 is heavily bearish
-                            if pcr_vol < 0.85: pcr_score = 1
-                            elif pcr_vol > 1.15: pcr_score = -1
-                        
-                        atm_call_intra = calls_intra.iloc[(calls_intra['strike'] - curr_price_intra).abs().argsort()[:1]]
-                        if not atm_call_intra.empty and 'impliedVolatility' in atm_call_intra:
-                            iv_intra = atm_call_intra['impliedVolatility'].values[0]
-                            implied_move = curr_price_intra * iv_intra * np.sqrt(1/365.0)
-                except: pass
+                
+                if calls_intra is not None and not calls_intra.empty and puts_intra is not None and not puts_intra.empty:
+                    total_call_vol = calls_intra['volume'].sum()
+                    total_put_vol = puts_intra['volume'].sum()
+                    if total_call_vol > 0: 
+                        pcr_vol = total_put_vol / total_call_vol
+                        if pcr_vol < 0.85: pcr_score = 1
+                        elif pcr_vol > 1.15: pcr_score = -1
+                    
+                    atm_call_intra = calls_intra.iloc[(calls_intra['strike'] - curr_price_intra).abs().argsort()[:1]]
+                    if not atm_call_intra.empty and 'impliedVolatility' in atm_call_intra:
+                        iv_intra = atm_call_intra['impliedVolatility'].values[0]
+                        implied_move = curr_price_intra * iv_intra * np.sqrt(1/365.0)
 
                 # 3. The Conviction Engine (Scoring -3 to +3)
                 score = 0
-                score += 1 if curr_price_intra > current_vwap else -1  # Macro intraday trend
-                score += 1 if curr_price_intra > curr_ema8 else -1     # Micro momentum
-                score += pcr_score                                     # Smart money flow
+                score += 1 if curr_price_intra > current_vwap else -1 
+                score += 1 if curr_price_intra > curr_ema8 else -1     
+                score += pcr_score                                     
 
                 if score == 3: signal, sig_col = "🟢 HIGH CONVICTION LONG", "#09ab3b"
                 elif score >= 1: signal, sig_col = "🟡 LEANING LONG (Scalp)", "#ffcc00"
@@ -622,7 +637,6 @@ with tab_intraday:
                 fig_intra.update_layout(template="plotly_dark", height=550, margin=dict(l=0, r=0, t=30, b=0), xaxis_rangeslider_visible=False, showlegend=True, legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01))
                 st.plotly_chart(fig_intra, use_container_width=True)
 
-                # --- START OF INTRADAY GLOSSARY ---
                 st.markdown("---")
                 with st.expander("📖 Intraday Algo Score & Indicator Glossary", expanded=False):
                     st.markdown("""
@@ -651,7 +665,6 @@ with tab_intraday:
                     * **VWAP Rel:** The exact percentage distance the current price is extended away from VWAP. Watch for mean-reversion (snap-backs) if this gets excessively high or low (e.g., > 1.5%).
                     * **1-Day Expected Move:** Based on the immediate ATM Implied Volatility. Projects the statistical boundaries of today's price action measured from the morning's Open price.
                     """)
-                # --- END OF INTRADAY GLOSSARY ---
 # --- END OF PART 10 ---
 
 # --- START OF PART 11: DEEP DIVE QUANT ---
@@ -659,10 +672,9 @@ with tab_deepdive:
     if target_ticker:
         with st.spinner(f"Running Quant analysis on {target_ticker}..."):
             try:
-                t_dd = yf.Ticker(target_ticker)
-                hist_dd = t_dd.history(period="1y")
+                _, hist_dd = fetch_tradier_history(target_ticker)
                 
-                if len(hist_dd) < 50:
+                if hist_dd.empty or len(hist_dd) < 50:
                     st.warning("Not enough trading history to generate a robust analysis.")
                 else:
                     hist_6mo = hist_dd.tail(126)
@@ -673,9 +685,10 @@ with tab_deepdive:
                     adx_14_dd = calculate_adx(hist_6mo)
                     poc_dd, sup1_dd, sup2_dd, res1_dd, res2_dd = calculate_volume_nodes(hist_6mo, dd_price)
 
-                    info_dd = t_dd.info
-                    short_pct = info_dd.get('shortPercentOfFloat', 0)
-                    if short_pct is None: short_pct = 0
+                    # Lightweight yfinance call for short float only
+                    short_pct = 0
+                    try: short_pct = yf.Ticker(target_ticker).info.get('shortPercentOfFloat', 0) or 0
+                    except: pass
                     
                     returns_1y = hist_dd['Close'].pct_change().dropna()
                     hv_20 = returns_1y.rolling(window=20).std() * np.sqrt(252)
@@ -686,42 +699,32 @@ with tab_deepdive:
                     atm_iv_dd = current_hv 
                     oi_fig = None
                     
-                    try:
-                        valid_dates = t_dd.options
-                        if valid_dates:
-                            target_dd = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d')
-                            target_dt = datetime.strptime(target_dd, '%Y-%m-%d')
-                            valid_dts = [datetime.strptime(d, '%Y-%m-%d') for d in valid_dates]
-                            snap_date = min(valid_dts, key=lambda d: abs(d - target_dt)).strftime('%Y-%m-%d')
+                    calls_dd, puts_dd, _ = fetch_tradier_intraday_options(target_ticker)
                             
-                            chain = t_dd.option_chain(snap_date)
-                            calls, puts = chain.calls, chain.puts
+                    if calls_dd is not None and not calls_dd.empty and puts_dd is not None and not puts_dd.empty:
+                        total_vol = calls_dd['volume'].fillna(0).sum() + puts_dd['volume'].fillna(0).sum()
+                        avg_vol = total_vol / (len(calls_dd) + len(puts_dd))
+                        if avg_vol > 300: liq_status, liq_text = "🌊 **A+ Liquidity:**", "Highly liquid options chain. Minimal slippage expected."
+                        elif avg_vol < 50: liq_status, liq_text = "🧊 **Poor Liquidity:**", "Low volume. Expect massive slippage."
+                        
+                        otm_call = calls_dd[calls_dd['strike'] >= dd_price * 1.1]
+                        otm_put = puts_dd[puts_dd['strike'] <= dd_price * 0.9]
+                        
+                        if not calls_dd.empty: atm_iv_dd = calls_dd.iloc[(calls_dd['strike'] - dd_price).abs().argsort()[:1]]['impliedVolatility'].values[0]
                             
-                            if not calls.empty and not puts.empty:
-                                total_vol = calls['volume'].fillna(0).sum() + puts['volume'].fillna(0).sum()
-                                avg_vol = total_vol / (len(calls) + len(puts))
-                                if avg_vol > 300: liq_status, liq_text = "🌊 **A+ Liquidity:**", "Highly liquid options chain. Minimal slippage expected."
-                                elif avg_vol < 50: liq_status, liq_text = "🧊 **Poor Liquidity:**", "Low volume. Expect massive slippage."
+                        if not otm_call.empty and not otm_put.empty:
+                            skew_diff = otm_put.iloc[-1]['impliedVolatility'] - otm_call.iloc[0]['impliedVolatility']
+                            if skew_diff > 0.12: skew_status, skew_text = "🚨 **Severe Downside Skew:**", "Market pricing OTM Puts higher than Calls. Crash protection is expensive."
+                            elif skew_diff < -0.12: skew_status, skew_text = "🚀 **Upside Call Skew:**", "OTM Calls pricing higher than Puts. Market anticipating upside."
                                 
-                                otm_call = calls[calls['strike'] >= dd_price * 1.1]
-                                otm_put = puts[puts['strike'] <= dd_price * 0.9]
-                                
-                                if not calls.empty: atm_iv_dd = calls.iloc[(calls['strike'] - dd_price).abs().argsort()[:1]]['impliedVolatility'].values[0]
-                                    
-                                if not otm_call.empty and not otm_put.empty:
-                                    skew_diff = otm_put.iloc[-1]['impliedVolatility'] - otm_call.iloc[0]['impliedVolatility']
-                                    if skew_diff > 0.12: skew_status, skew_text = "🚨 **Severe Downside Skew:**", "Market pricing OTM Puts higher than Calls. Crash protection is expensive."
-                                    elif skew_diff < -0.12: skew_status, skew_text = "🚀 **Upside Call Skew:**", "OTM Calls pricing higher than Puts. Market anticipating upside."
-                                        
-                                calls_oi = calls[(calls['strike'] >= dd_price * 0.85) & (calls['strike'] <= dd_price * 1.15)]
-                                puts_oi = puts[(puts['strike'] >= dd_price * 0.85) & (puts['strike'] <= dd_price * 1.15)]
-                                
-                                oi_fig = go.Figure()
-                                oi_fig.add_trace(go.Bar(x=calls_oi['strike'], y=calls_oi['openInterest'], name='Call OI', marker_color='#09ab3b', opacity=0.7))
-                                oi_fig.add_trace(go.Bar(x=puts_oi['strike'], y=puts_oi['openInterest'], name='Put OI', marker_color='#ff4b4b', opacity=0.7))
-                                oi_fig.update_layout(title="Open Interest Profile", template="plotly_dark", height=300, margin=dict(l=0, r=0, t=30, b=0), barmode='group')
-                                oi_fig.add_vline(x=dd_price, line_width=2, line_dash="dash", line_color="white", annotation_text="Price")
-                    except: pass
+                        calls_oi = calls_dd[(calls_dd['strike'] >= dd_price * 0.85) & (calls_dd['strike'] <= dd_price * 1.15)]
+                        puts_oi = puts_dd[(puts_dd['strike'] >= dd_price * 0.85) & (puts_dd['strike'] <= dd_price * 1.15)]
+                        
+                        oi_fig = go.Figure()
+                        oi_fig.add_trace(go.Bar(x=calls_oi['strike'], y=calls_oi['openInterest'], name='Call OI', marker_color='#09ab3b', opacity=0.7))
+                        oi_fig.add_trace(go.Bar(x=puts_oi['strike'], y=puts_oi['openInterest'], name='Put OI', marker_color='#ff4b4b', opacity=0.7))
+                        oi_fig.update_layout(title="Open Interest Profile", template="plotly_dark", height=300, margin=dict(l=0, r=0, t=30, b=0), barmode='group')
+                        oi_fig.add_vline(x=dd_price, line_width=2, line_dash="dash", line_color="white", annotation_text="Price")
 
                     ivr_val = calculate_ivr(hist_dd, atm_iv_dd)
                     ivr_str = f"{ivr_val:.1f}" if isinstance(ivr_val, (int, float)) else "N/A"
