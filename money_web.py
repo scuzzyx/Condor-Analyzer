@@ -147,7 +147,7 @@ def fetch_tradier_1m(symbol):
     
     start_dt = now_ny - timedelta(days=4) 
     
-    # STRICT TIME FIX: Appending hours/minutes to prevent the API from cutting off at midnight
+    # Appending hours/minutes to prevent the API from cutting off at midnight
     start_str = start_dt.strftime('%Y-%m-%d 00:00')
     end_str = now_ny.strftime('%Y-%m-%d 23:59')
     
@@ -164,16 +164,11 @@ def fetch_tradier_1m(symbol):
                     df.set_index('time', inplace=True)
                     df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}, inplace=True)
                     
-                    # STRICT DATE ENFORCEMENT
-                    market_open = now_ny.replace(hour=9, minute=30, second=0, microsecond=0)
+                    # DYNAMIC DAY CATCHER: Never force a date. 
+                    # Always take the absolute most recent day provided by the live API tape.
+                    last_day = df.index[-1].date()
+                    df = df[df.index.date == last_day]
                     
-                    # If market is open right now, strictly enforce today's date. 
-                    if now_ny >= market_open and now_ny.weekday() < 5:
-                        target_date = now_ny.date()
-                    else:
-                        target_date = df.index[-1].date()
-                        
-                    df = df[df.index.date == target_date]
                     return symbol, df
     except: pass
     return symbol, pd.DataFrame()
