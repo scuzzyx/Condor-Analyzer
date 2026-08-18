@@ -138,8 +138,16 @@ def fetch_tradier_history(symbol):
 
 def fetch_tradier_1m(symbol):
     headers = {"Authorization": f"Bearer {st.secrets['TRADIER_API_KEY'].strip()}", "Accept": "application/json"}
-    # VWAP FIX: Added session_filter=open to prevent pre-market data from skewing the calculation
-    url = f"https://api.tradier.com/v1/markets/timesales?symbol={symbol}&interval=1min&session_filter=open"
+    
+    # Look back 4 days to ensure we always catch the last open session (even over long weekends)
+    end_dt = datetime.now()
+    start_dt = end_dt - timedelta(days=4) 
+    
+    start_str = start_dt.strftime('%Y-%m-%d')
+    end_str = end_dt.strftime('%Y-%m-%d')
+    
+    url = f"https://api.tradier.com/v1/markets/timesales?symbol={symbol}&interval=1min&session_filter=open&start={start_str}&end={end_str}"
+    
     try:
         res = requests.get(url, headers=headers, timeout=5)
         if res.status_code == 200:
@@ -150,6 +158,11 @@ def fetch_tradier_1m(symbol):
                     df['time'] = pd.to_datetime(df['time'])
                     df.set_index('time', inplace=True)
                     df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}, inplace=True)
+                    
+                    # Isolate only the most recent trading day's data so the chart stays clean
+                    last_day = df.index[-1].date()
+                    df = df[df.index.date == last_day]
+                    
                     return symbol, df
     except: pass
     return symbol, pd.DataFrame()
@@ -263,7 +276,6 @@ def fetch_macro_data():
     
     try:
         url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
-        # CNN FIX: Restored full browser User-Agent to bypass firewall
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
             'Accept': 'application/json, text/plain, */*',
