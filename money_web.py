@@ -143,11 +143,11 @@ def fetch_tradier_history(symbol):
 def fetch_tradier_1m(symbol):
     headers = {"Authorization": f"Bearer {st.secrets['TRADIER_API_KEY'].strip()}", "Accept": "application/json"}
     ny_tz = pytz.timezone('US/Eastern')
-    end_dt = datetime.now(ny_tz)
-    start_dt = end_dt - timedelta(days=4) 
+    now_ny = datetime.now(ny_tz)
     
+    start_dt = now_ny - timedelta(days=4) 
     start_str = start_dt.strftime('%Y-%m-%d')
-    end_str = end_dt.strftime('%Y-%m-%d')
+    end_str = now_ny.strftime('%Y-%m-%d')
     
     url = f"https://api.tradier.com/v1/markets/timesales?symbol={symbol}&interval=1min&session_filter=open&start={start_str}&end={end_str}"
     
@@ -162,12 +162,34 @@ def fetch_tradier_1m(symbol):
                     df.set_index('time', inplace=True)
                     df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}, inplace=True)
                     
-                    last_day = df.index[-1].date()
-                    df = df[df.index.date == last_day]
+                    # STRICT DATE ENFORCEMENT
+                    market_open = now_ny.replace(hour=9, minute=30, second=0, microsecond=0)
                     
+                    # If market is open right now, strictly enforce today's date. 
+                    if now_ny >= market_open and now_ny.weekday() < 5:
+                        target_date = now_ny.date()
+                    else:
+                        target_date = df.index[-1].date()
+                        
+                    df = df[df.index.date == target_date]
                     return symbol, df
     except: pass
     return symbol, pd.DataFrame()
+
+def fetch_tradier_quote(symbol):
+    headers = {"Authorization": f"Bearer {st.secrets['TRADIER_API_KEY'].strip()}", "Accept": "application/json"}
+    url = f"https://api.tradier.com/v1/markets/quotes?symbols={symbol}"
+    try:
+        res = requests.get(url, headers=headers, timeout=5)
+        if res.status_code == 200:
+            data = res.json()
+            quote_data = data.get('quotes', {}).get('quote', {})
+            # Handle both single and multiple symbol returns
+            if isinstance(quote_data, list): quote_data = quote_data[0]
+            if quote_data:
+                return float(quote_data.get('last', 0.0))
+    except: pass
+    return None
 
 def fetch_tradier_intraday_options(symbol):
     headers = {"Authorization": f"Bearer {st.secrets['TRADIER_API_KEY'].strip()}", "Accept": "application/json"}
@@ -242,7 +264,10 @@ def run_short_hunter(ticker_list):
                 df_sym = calculate_vwap(df_sym)
                 df_sym['EMA_8'] = df_sym['Close'].ewm(span=8, adjust=False).mean()
                 
-                curr_price = df_sym['Close'].iloc[-1]
+                # Fetch absolute live sub-second quote for scanner evaluation
+                live_quote = fetch_tradier_quote(sym)
+                curr_price = live_quote if live_quote else df_sym['Close'].iloc[-1]
+                
                 curr_vwap = df_sym['VWAP'].iloc[-1]
                 curr_ema8 = df_sym['EMA_8'].iloc[-1]
                 
@@ -598,6 +623,9 @@ with tab_scanner:
 # --- START OF PART 10: INTRADAY SNIPER (UPGRADED QUANT ENGINE) ---
 with tab_intraday:
     if target_ticker:
+        # ADDED: Tactical manual refresh button
+        st.button("🔄 Force Live Tape Refresh", use_container_width=True)
+        
         with st.spinner(f"Acquiring Institutional Tape & Volume Profiles for {target_ticker}..."):
             _, hist_dd = fetch_tradier_history(target_ticker)
             _, df_intraday = fetch_tradier_1m(target_ticker)
@@ -616,7 +644,7 @@ with tab_intraday:
                         pdh = float(hist_past['High'].iloc[-1])
                         pdl = float(hist_past['Low'].iloc[-1])
                         pdc = float(hist_past['Close'].iloc[-1])
-                        avg_daily_vol = hist_past['Volume'].tail(20).mean() # BUG FIX: Isolated strictly to closed historical sessions
+                        avg_daily_vol = hist_past['Volume'].tail(20).mean() # Isolated strictly to closed historical sessions
 
                 # 2. RVOL (Relative Volume) Calculation
                 now_ny = datetime.now(ny_tz)
@@ -642,7 +670,10 @@ with tab_intraday:
                 df_intraday = calculate_vwap(df_intraday)
                 df_intraday['EMA_8'] = df_intraday['Close'].ewm(span=8, adjust=False).mean()
                 
-                curr_price_intra = df_intraday['Close'].iloc[-1]
+                # Fetch absolute live sub-second quote
+                live_quote = fetch_tradier_quote(target_ticker)
+                curr_price_intra = live_quote if live_quote else df_intraday['Close'].iloc[-1]
+                
                 open_price = df_intraday['Open'].iloc[0]
                 current_vwap = df_intraday['VWAP'].iloc[-1]
                 curr_ema8 = df_intraday['EMA_8'].iloc[-1]
