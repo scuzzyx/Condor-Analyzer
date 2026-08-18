@@ -138,7 +138,8 @@ def fetch_tradier_history(symbol):
 
 def fetch_tradier_1m(symbol):
     headers = {"Authorization": f"Bearer {st.secrets['TRADIER_API_KEY'].strip()}", "Accept": "application/json"}
-    url = f"https://api.tradier.com/v1/markets/timesales?symbol={symbol}&interval=1min"
+    # VWAP FIX: Added session_filter=open to prevent pre-market data from skewing the calculation
+    url = f"https://api.tradier.com/v1/markets/timesales?symbol={symbol}&interval=1min&session_filter=open"
     try:
         res = requests.get(url, headers=headers, timeout=5)
         if res.status_code == 200:
@@ -254,7 +255,6 @@ def run_short_hunter(ticker_list):
 def fetch_macro_data():
     vix_val, vix_pct, fg_val, fg_rating = "N/A", "N/A", "N/A", "N/A"
     try:
-        # Replaced yfinance with Tradier for VIX
         _, vix_hist = fetch_tradier_history("VIX")
         if not vix_hist.empty and len(vix_hist) >= 2:
             vix_val = float(vix_hist['Close'].iloc[-1])
@@ -263,11 +263,14 @@ def fetch_macro_data():
     
     try:
         url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
+        # CNN FIX: Restored full browser User-Agent to bypass firewall
         headers = {
-            'User-Agent': 'Mozilla/5.0',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
             'Accept': 'application/json, text/plain, */*',
             'Referer': 'https://www.cnn.com/',
-            'Origin': 'https://www.cnn.com/'
+            'Origin': 'https://www.cnn.com/',
+            'Sec-Fetch-Site': 'cross-site',
+            'Sec-Fetch-Mode': 'cors'
         }
         res = requests.get(url, headers=headers, timeout=5)
         if res.status_code == 200:
