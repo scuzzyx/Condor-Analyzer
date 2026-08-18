@@ -4,6 +4,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+import pytz
 import plotly.graph_objects as go
 from scipy.stats import norm
 import requests
@@ -104,7 +105,8 @@ def calculate_vwap(df):
     return df
 
 def get_pure_fridays(weeks=26):
-    today = datetime.now()
+    ny_tz = pytz.timezone('US/Eastern')
+    today = datetime.now(ny_tz)
     days_until_friday = (4 - today.weekday()) % 7
     next_friday = today + timedelta(days=days_until_friday)
     return [(next_friday + timedelta(weeks=i)).strftime('%Y-%m-%d') for i in range(weeks)]
@@ -119,8 +121,11 @@ def intraday_metric(label, value, sub_value="", val_color="#FAFAFA", sub_color="
 # --- START OF PART 4: TRADIER GLOBAL ENGINE & SCRAPERS ---
 def fetch_tradier_history(symbol):
     headers = {"Authorization": f"Bearer {st.secrets['TRADIER_API_KEY'].strip()}", "Accept": "application/json"}
-    end_date = datetime.now()
+    
+    ny_tz = pytz.timezone('US/Eastern')
+    end_date = datetime.now(ny_tz)
     start_date = end_date - timedelta(days=365)
+    
     url = f"https://api.tradier.com/v1/markets/history?symbol={symbol}&start={start_date.strftime('%Y-%m-%d')}&end={end_date.strftime('%Y-%m-%d')}"
     try:
         res = requests.get(url, headers=headers, timeout=5)
@@ -139,8 +144,8 @@ def fetch_tradier_history(symbol):
 def fetch_tradier_1m(symbol):
     headers = {"Authorization": f"Bearer {st.secrets['TRADIER_API_KEY'].strip()}", "Accept": "application/json"}
     
-    # Look back 4 days to ensure we always catch the last open session (even over long weekends)
-    end_dt = datetime.now()
+    ny_tz = pytz.timezone('US/Eastern')
+    end_dt = datetime.now(ny_tz)
     start_dt = end_dt - timedelta(days=4) 
     
     start_str = start_dt.strftime('%Y-%m-%d')
@@ -159,7 +164,6 @@ def fetch_tradier_1m(symbol):
                     df.set_index('time', inplace=True)
                     df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}, inplace=True)
                     
-                    # Isolate only the most recent trading day's data so the chart stays clean
                     last_day = df.index[-1].date()
                     df = df[df.index.date == last_day]
                     
@@ -178,7 +182,9 @@ def fetch_tradier_intraday_options(symbol):
         if not dates: return None, None, None
         if isinstance(dates, str): dates = [dates]
         
-        target_dt = datetime.now()
+        ny_tz = pytz.timezone('US/Eastern')
+        target_dt = datetime.now(ny_tz).replace(tzinfo=None)
+        
         valid_dts = [datetime.strptime(d, '%Y-%m-%d') for d in dates]
         snap_date = min(valid_dts, key=lambda d: abs(d - target_dt)).strftime('%Y-%m-%d')
         
@@ -312,7 +318,10 @@ def fetch_vault_payload(symbol, target_date):
             if 'expirations' in exp_data and exp_data['expirations'] and 'date' in exp_data['expirations']:
                 dates = exp_data['expirations']['date']
                 if isinstance(dates, str): dates = [dates]
+                
+                ny_tz = pytz.timezone('US/Eastern')
                 target_dt = datetime.strptime(target_date, '%Y-%m-%d')
+                
                 valid_dts = [datetime.strptime(d, '%Y-%m-%d') for d in dates]
                 if valid_dts:
                     snap_date = min(valid_dts, key=lambda d: abs(d - target_dt)).strftime('%Y-%m-%d')
@@ -344,7 +353,6 @@ def fetch_vault_payload(symbol, target_date):
 
         calls, puts = pd.DataFrame(calls_list), pd.DataFrame(puts_list)
 
-        # Restricted lightweight yfinance for corporate actions only
         try:
             t = yf.Ticker(symbol)
             info, calendar = t.info, t.calendar
@@ -380,7 +388,8 @@ else:
     selected_date_str = st.sidebar.selectbox("Standard Friday Expirations (6 Mo):", options=get_pure_fridays(weeks=26))
 
 target_delta = st.sidebar.select_slider("Target Strike Delta:", options=[0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40], value=0.15)
-dte = max(1, (datetime.strptime(selected_date_str, '%Y-%m-%d') - datetime.now()).days)
+ny_tz = pytz.timezone('US/Eastern')
+dte = max(1, (datetime.strptime(selected_date_str, '%Y-%m-%d').replace(tzinfo=ny_tz) - datetime.now(ny_tz)).days)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔥 Premium Hunter Scanner")
@@ -500,7 +509,10 @@ with tab_scanner:
                     try:
                         ex_dt = datetime.fromtimestamp(info['exDividendDate'])
                         ex_div_date = ex_dt.strftime('%Y-%m-%d')
-                        if datetime.now() < ex_dt < datetime.strptime(target_date, '%Y-%m-%d'): ex_div_veto = True
+                        
+                        ny_tz = pytz.timezone('US/Eastern')
+                        if datetime.now(ny_tz).replace(tzinfo=None) < ex_dt < datetime.strptime(target_date, '%Y-%m-%d'): 
+                            ex_div_veto = True
                     except: pass
 
                 calendar = v_data["calendar"]
@@ -510,7 +522,9 @@ with tab_scanner:
                         e_date = pd.to_datetime(calendar.get('Earnings Date')[0]) if isinstance(calendar, dict) else pd.to_datetime(calendar.loc['Earnings Date'].iloc[0])
                         if pd.notnull(e_date):
                             earnings_date = e_date.strftime('%Y-%m-%d')
-                            if datetime.now() < e_date < datetime.strptime(target_date, '%Y-%m-%d'): earnings_veto = True
+                            ny_tz = pytz.timezone('US/Eastern')
+                            if datetime.now(ny_tz).replace(tzinfo=None) < e_date < datetime.strptime(target_date, '%Y-%m-%d'): 
+                                earnings_veto = True
                 except: pass
 
                 if current_price < ema_8 and rsi_14 < 45: base_risk = "🔴 ***FALLING KNIFE***: Call Spreads Only"
