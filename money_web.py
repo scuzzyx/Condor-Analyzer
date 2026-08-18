@@ -121,7 +121,6 @@ def intraday_metric(label, value, sub_value="", val_color="#FAFAFA", sub_color="
 # --- START OF PART 4: TRADIER GLOBAL ENGINE & SCRAPERS ---
 def fetch_tradier_history(symbol):
     headers = {"Authorization": f"Bearer {st.secrets['TRADIER_API_KEY'].strip()}", "Accept": "application/json"}
-    
     ny_tz = pytz.timezone('US/Eastern')
     end_date = datetime.now(ny_tz)
     start_date = end_date - timedelta(days=365)
@@ -143,7 +142,6 @@ def fetch_tradier_history(symbol):
 
 def fetch_tradier_1m(symbol):
     headers = {"Authorization": f"Bearer {st.secrets['TRADIER_API_KEY'].strip()}", "Accept": "application/json"}
-    
     ny_tz = pytz.timezone('US/Eastern')
     end_dt = datetime.now(ny_tz)
     start_dt = end_dt - timedelta(days=4) 
@@ -248,9 +246,19 @@ def run_short_hunter(ticker_list):
                 curr_vwap = df_sym['VWAP'].iloc[-1]
                 curr_ema8 = df_sym['EMA_8'].iloc[-1]
                 
+                # 4-Factor Engine Upgrade for Scanner
+                orb_low, orb_high = None, None
+                orb_df = df_sym.between_time('09:30', '09:44')
+                if not orb_df.empty:
+                    orb_low = float(orb_df['Low'].min())
+                    orb_high = float(orb_df['High'].max())
+
                 score = 0
                 score += 1 if curr_price > curr_vwap else -1
                 score += 1 if curr_price > curr_ema8 else -1
+                
+                if orb_low and curr_price < orb_low: score += -1
+                elif orb_high and curr_price > orb_high: score += 1
                 
                 if score > -2: continue
                 
@@ -265,7 +273,8 @@ def run_short_hunter(ticker_list):
                         elif pcr < 0.85: pcr_score = 1
                 
                 score += pcr_score
-                if score == -3: targets.append(sym)
+                
+                if score <= -3: targets.append(sym)
                 
         return targets
     except: return []
@@ -607,7 +616,7 @@ with tab_intraday:
                         pdh = float(hist_past['High'].iloc[-1])
                         pdl = float(hist_past['Low'].iloc[-1])
                         pdc = float(hist_past['Close'].iloc[-1])
-                    avg_daily_vol = hist_dd['Volume'].tail(20).mean()
+                        avg_daily_vol = hist_past['Volume'].tail(20).mean() # BUG FIX: Isolated strictly to closed historical sessions
 
                 # 2. RVOL (Relative Volume) Calculation
                 now_ny = datetime.now(ny_tz)
